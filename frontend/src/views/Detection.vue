@@ -13,9 +13,17 @@
           <el-icon><Picture /></el-icon>
           图片检测
         </el-radio-button>
+        <el-radio-button label="image_seg">
+          <el-icon><Picture /></el-icon>
+          图片分割
+        </el-radio-button>
         <el-radio-button label="video">
           <el-icon><VideoPlay /></el-icon>
           视频检测
+        </el-radio-button>
+        <el-radio-button label="video_seg">
+          <el-icon><VideoPlay /></el-icon>
+          视频分割
         </el-radio-button>
         <el-radio-button label="camera">
           <el-icon><Camera /></el-icon>
@@ -58,15 +66,15 @@
           </template>
           
           <!-- 图片上传 -->
-          <div v-if="detectionMode === 'image'" class="upload-section">
+          <div v-if="detectionMode === 'image' || detectionMode === 'image_seg'" class="upload-section">
             <el-upload
               class="image-uploader"
-              :action="uploadAction"
+              :action="getUploadAction()"
               :show-file-list="false"
               :before-upload="beforeImageUpload"
               :on-success="handleImageSuccess"
               :on-error="handleUploadError"
-              :data="{ user_id: $store.getters.currentUser?.id }"
+              :data="getUploadData()"
               drag
             >
               <div v-if="!imageUrl" class="upload-placeholder">
@@ -74,6 +82,9 @@
                 <div class="upload-text">
                   <p>拖拽图片到此处，或<em>点击上传</em></p>
                   <p class="upload-tip">支持 JPG、PNG、GIF 格式，大小不超过 10MB</p>
+                  <p v-if="detectionMode === 'image_seg'" class="upload-tip seg-tip">
+                    🎭 分割模式：将显示详细的目标轮廓和彩色掩码
+                  </p>
                 </div>
               </div>
               <img v-else :src="imageUrl" class="uploaded-image" alt="上传的图片">
@@ -81,7 +92,7 @@
           </div>
           
           <!-- 视频上传 -->
-          <div v-if="detectionMode === 'video'" class="upload-section">
+          <div v-if="detectionMode === 'video' || detectionMode === 'video_seg'" class="upload-section">
             <el-upload
               class="video-uploader"
               :auto-upload="false"
@@ -95,6 +106,9 @@
                 <div class="upload-text">
                   <p>拖拽视频到此处，或<em>点击上传</em></p>
                   <p class="upload-tip">支持 MP4、AVI、MOV 格式，大小不超过 100MB</p>
+                  <p v-if="detectionMode === 'video_seg'" class="upload-tip seg-tip">
+                    🎭 分割模式：将在视频中显示彩色分割掩码
+                  </p>
                 </div>
               </div>
               <video v-else :src="videoUrl" class="uploaded-video" controls>
@@ -157,8 +171,70 @@
             </div>
           </div>
           
+          <!-- 分割设置 -->
+          <div class="segmentation-controls" v-if="isSegmentationMode">
+            <el-card class="seg-card" shadow="never">
+              <template #header>
+                <div class="card-header">
+                  <span>分割可视化设置</span>
+                </div>
+              </template>
+              
+              <el-form label-width="100px" size="small">
+                <el-form-item label="显示掩码">
+                  <el-switch v-model="segmentationSettings.showMasks" />
+                  <div class="setting-desc">
+                    显示彩色分割掩码，突出显示目标的精确轮廓
+                  </div>
+                </el-form-item>
+                
+                <el-form-item label="显示边界框">
+                  <el-switch v-model="segmentationSettings.showBoxes" />
+                  <div class="setting-desc">
+                    显示目标检测边界框
+                  </div>
+                </el-form-item>
+                
+                <el-form-item label="显示标签">
+                  <el-switch v-model="segmentationSettings.showLabels" />
+                  <div class="setting-desc">
+                    显示类别名称和置信度
+                  </div>
+                </el-form-item>
+                
+                <el-form-item label="掩码透明度">
+                  <el-slider 
+                    v-model="segmentationSettings.maskAlpha" 
+                    :min="0.1" 
+                    :max="0.9" 
+                    :step="0.1"
+                    show-input
+                    style="width: 200px;"
+                  />
+                  <div class="setting-desc">
+                    调整分割掩码的透明度，值越小掩码越透明
+                  </div>
+                </el-form-item>
+                
+                <el-form-item label="置信度阈值">
+                  <el-slider 
+                    v-model="segmentationSettings.confThreshold" 
+                    :min="0.1" 
+                    :max="0.9" 
+                    :step="0.05"
+                    show-input
+                    style="width: 200px;"
+                  />
+                  <div class="setting-desc">
+                    只显示置信度大于此阈值的检测结果
+                  </div>
+                </el-form-item>
+              </el-form>
+            </el-card>
+          </div>
+          
           <!-- 跟踪和计数设置 -->
-          <div class="tracking-controls" v-if="detectionMode !== 'image'">
+          <div class="tracking-controls" v-if="detectionMode !== 'image' && detectionMode !== 'image_seg'">
             <el-card class="tracking-card" shadow="never">
               <template #header>
                 <div class="card-header">
@@ -235,6 +311,12 @@
                 <el-tag v-if="detectionResult.detections" type="success">
                   检测到 {{ detectionResult.detections.length }} 个目标
                 </el-tag>
+                <el-tag v-if="detectionResult.segmentation_results" type="warning">
+                  分割掩码: {{ detectionResult.segmentation_results.masks_count || 0 }}
+                </el-tag>
+                <el-tag v-if="detectionResult.model_type === 'segmentation'" type="info">
+                  {{ detectionResult.model_type === 'segmentation' ? '分割模式' : '检测模式' }}
+                </el-tag>
                 <el-tag v-if="detectionResult.tracking_results" type="primary">
                   跟踪到 {{ detectionResult.tracking_results.length }} 个轨迹
                 </el-tag>
@@ -250,24 +332,24 @@
           
           <div class="result-content">
             <!-- 检测结果图片 -->
-            <div v-if="detectionResult.result_image && detectionMode === 'image'" class="result-media">
+            <div v-if="detectionResult.result_image && (detectionMode === 'image' || detectionMode === 'image_seg')" class="result-media">
               <img 
                 :src="getResultImageUrl()" 
                 class="result-image" 
-                alt="检测结果" 
+                :alt="detectionMode === 'image_seg' ? '分割结果' : '检测结果'" 
                 @error="handleImageError"
                 @click="openImagePreview(getResultImageUrl())"
               >
               <div class="image-overlay">
                 <el-button type="primary" @click="openImagePreview(getResultImageUrl())">
                   <el-icon><ZoomIn /></el-icon>
-                  点击放大查看
+                  点击放大查看{{ detectionMode === 'image_seg' ? '分割结果' : '' }}
                 </el-button>
               </div>
             </div>
             
             <!-- 检测结果视频 -->
-            <div v-if="detectionResult.result_video && detectionMode === 'video'" class="result-media">
+            <div v-if="detectionResult.result_video && (detectionMode === 'video' || detectionMode === 'video_seg')" class="result-media">
               <video 
                 :src="getResultVideoUrl()" 
                 class="result-video" 
@@ -282,7 +364,7 @@
               <div class="video-overlay">
                 <el-button type="primary" @click="openVideoPreview(getResultVideoUrl())">
                   <el-icon><ZoomIn /></el-icon>
-                  全屏查看
+                  全屏查看{{ detectionMode === 'video_seg' ? '分割结果' : '' }}
                 </el-button>
               </div>
             </div>
@@ -565,6 +647,15 @@ export default {
         enableAlert: false,
         countingClass: ''
       },
+      // 新增分割设置
+      segmentationSettings: {
+        showMasks: true,
+        showBoxes: true,
+        showLabels: true,
+        maskAlpha: 0.4,
+        confThreshold: 0.25,
+        iouThreshold: 0.45
+      },
       availableClasses: [],
       // 新增类别计数显示相关数据
       classCounts: {
@@ -584,7 +675,13 @@ export default {
   computed: {
     canDetect() {
       return (this.detectionMode === 'image' && this.imageUrl) || 
-             (this.detectionMode === 'video' && this.videoFile)
+             (this.detectionMode === 'image_seg' && this.imageUrl) ||
+             (this.detectionMode === 'video' && this.videoFile) ||
+             (this.detectionMode === 'video_seg' && this.videoFile)
+    },
+    
+    isSegmentationMode() {
+      return this.detectionMode === 'image_seg' || this.detectionMode === 'video_seg'
     },
     
     // 获取类别计数数据
@@ -654,10 +751,50 @@ export default {
     getModeTitle() {
       const titles = {
         image: '图片上传检测',
+        image_seg: '图片分割检测',
         video: '视频上传检测',
+        video_seg: '视频分割检测',
         camera: '摄像头实时检测'
       }
       return titles[this.detectionMode]
+    },
+    
+    getUploadAction() {
+      if (this.detectionMode === 'image_seg') {
+        return 'http://localhost:5000/api/segment_image'
+      } else if (this.detectionMode === 'video_seg') {
+        return 'http://localhost:5000/api/segment_video'
+      } else if (this.detectionMode === 'image') {
+        return 'http://localhost:5000/api/detect_image'
+      } else {
+        return this.videoUploadAction
+      }
+    },
+    
+    getUploadData() {
+      const baseData = {
+        user_id: this.$store.getters.currentUser?.id || 1
+      }
+      
+      if (this.isSegmentationMode) {
+        return {
+          ...baseData,
+          show_masks: this.segmentationSettings.showMasks,
+          show_boxes: this.segmentationSettings.showBoxes,
+          show_labels: this.segmentationSettings.showLabels,
+          mask_alpha: this.segmentationSettings.maskAlpha,
+          conf_threshold: this.segmentationSettings.confThreshold,
+          iou_threshold: this.segmentationSettings.iouThreshold
+        }
+      } else {
+        return {
+          ...baseData,
+          enable_tracking: this.trackingSettings.enableTracking,
+          enable_counting: this.trackingSettings.enableCounting,
+          enable_alert: this.trackingSettings.enableAlert,
+          counting_class: this.trackingSettings.countingClass
+        }
+      }
     },
     
     // 获取总计数
@@ -836,14 +973,25 @@ export default {
       if (response.success) {
         // 确保结果稳定显示
         this.detectionResult = { ...response }
-        let message = `视频检测完成！处理了 ${response.processed_frames || 0} 帧，检测到 ${response.total_detections || 0} 个目标`
         
-        if (response.tracking_results) {
-          message += `，跟踪到 ${response.tracking_count || 0} 个轨迹`
-        }
-        
-        if (response.counting_results) {
-          message += `，计数结果: ${response.total_count || 0}`
+        let message = ''
+        if (response.model_type === 'segmentation') {
+          // 分割模式的消息
+          const stats = response.segmentation_stats || {}
+          message = `视频分割完成！处理了 ${stats.total_frames || 0} 帧，`
+          message += `检测到 ${stats.total_detections || 0} 个目标，`
+          message += `生成了 ${stats.total_masks || 0} 个分割掩码`
+        } else {
+          // 普通检测模式的消息
+          message = `视频检测完成！处理了 ${response.processed_frames || 0} 帧，检测到 ${response.total_detections || 0} 个目标`
+          
+          if (response.tracking_results) {
+            message += `，跟踪到 ${response.tracking_count || 0} 个轨迹`
+          }
+          
+          if (response.counting_results) {
+            message += `，计数结果: ${response.total_count || 0}`
+          }
         }
         
         ElMessage.success(message)
@@ -1086,9 +1234,9 @@ export default {
     
     // 检测相关
     async startDetection() {
-      if (this.detectionMode === 'image' && this.imageUrl) {
+      if ((this.detectionMode === 'image' || this.detectionMode === 'image_seg') && this.imageUrl) {
         ElMessage.info('请重新上传图片以触发检测')
-      } else if (this.detectionMode === 'video' && this.videoFile) {
+      } else if ((this.detectionMode === 'video' || this.detectionMode === 'video_seg') && this.videoFile) {
         await this.detectVideo()
       }
     },
@@ -1104,13 +1252,29 @@ export default {
         
         const formData = new FormData()
         formData.append('file', this.videoFile)
-        formData.append('user_id', this.$store.getters.currentUser?.id || 1)
-        formData.append('enable_tracking', this.trackingSettings.enableTracking)
-        formData.append('enable_counting', this.trackingSettings.enableCounting)
-        formData.append('enable_alert', this.trackingSettings.enableAlert)
-        formData.append('counting_class', '') // 统计所有类别
         
-        const response = await fetch(this.videoUploadAction, {
+        // 根据模式添加不同的参数
+        if (this.detectionMode === 'video_seg') {
+          formData.append('user_id', this.$store.getters.currentUser?.id || 1)
+          formData.append('show_masks', this.segmentationSettings.showMasks)
+          formData.append('show_boxes', this.segmentationSettings.showBoxes)
+          formData.append('show_labels', this.segmentationSettings.showLabels)
+          formData.append('mask_alpha', this.segmentationSettings.maskAlpha)
+          formData.append('conf_threshold', this.segmentationSettings.confThreshold)
+          formData.append('iou_threshold', this.segmentationSettings.iouThreshold)
+        } else {
+          formData.append('user_id', this.$store.getters.currentUser?.id || 1)
+          formData.append('enable_tracking', this.trackingSettings.enableTracking)
+          formData.append('enable_counting', this.trackingSettings.enableCounting)
+          formData.append('enable_alert', this.trackingSettings.enableAlert)
+          formData.append('counting_class', '') // 统计所有类别
+        }
+        
+        const uploadUrl = this.detectionMode === 'video_seg' ? 
+                         'http://localhost:5000/api/segment_video' : 
+                         this.videoUploadAction
+        
+        const response = await fetch(uploadUrl, {
           method: 'POST',
           body: formData
         })
@@ -1120,11 +1284,11 @@ export default {
         if (data.success) {
           this.handleVideoSuccess(data)
         } else {
-          ElMessage.error(data.message || '视频检测失败')
+          ElMessage.error(data.message || '视频处理失败')
         }
       } catch (error) {
-        console.error('视频检测失败:', error)
-        ElMessage.error('视频检测失败: ' + error.message)
+        console.error('视频处理失败:', error)
+        ElMessage.error('视频处理失败: ' + error.message)
       } finally {
         this.$store.commit('SET_LOADING', false)
       }
@@ -1426,18 +1590,40 @@ export default {
   flex-wrap: wrap;
 }
 
-.tracking-controls {
+.tracking-controls, .segmentation-controls {
   margin-bottom: 20px;
 }
 
-.tracking-card {
+.tracking-card, .seg-card {
   background: #f8f9fa;
   border: 1px solid #e9ecef;
 }
 
-.tracking-card :deep(.el-card__header) {
+.tracking-card :deep(.el-card__header), .seg-card :deep(.el-card__header) {
   background: #ffffff;
   border-bottom: 1px solid #e9ecef;
+}
+
+.seg-card {
+  background: #f0f9ff;
+  border: 1px solid #e0f2fe;
+}
+
+.seg-card :deep(.el-card__header) {
+  background: #f8fafc;
+  border-bottom: 1px solid #e0f2fe;
+}
+
+.setting-desc {
+  font-size: 12px;
+  color: #6b7280;
+  margin-top: 4px;
+  line-height: 1.4;
+}
+
+.seg-tip {
+  color: #059669 !important;
+  font-weight: 500;
 }
 
 .counting-info {

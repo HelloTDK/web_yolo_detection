@@ -13,6 +13,7 @@ from datetime import datetime
 import json
 from collections import defaultdict, deque
 import time
+from yolo_seg_handler import YOLOSegmentationHandler
 
 app = Flask(__name__)
 CORS(app)
@@ -72,16 +73,33 @@ class AlertRecord(db.Model):
 
 # 初始化YOLO模型
 model = None
+seg_handler = None
 current_model_path = 'yolov8n.pt'  # 当前加载的模型路径
+current_model_type = 'detection'  # 'detection' 或 'segmentation'
 
 def load_yolo_model(model_path='yolov8n.pt'):
-    global model, current_model_path
+    global model, seg_handler, current_model_path, current_model_type
     try:
-        # 使用指定的模型路径
-        model = YOLO(model_path)
-        current_model_path = model_path
-        print(f"✅ YOLO模型加载成功: {model_path}")
-        return True
+        # 判断是否为分割模型
+        if 'seg' in model_path.lower():
+            # 加载分割模型
+            seg_handler = YOLOSegmentationHandler(model_path)
+            if seg_handler.model:
+                current_model_type = 'segmentation'
+                model = seg_handler.model  # 保持兼容性
+                current_model_path = model_path
+                print(f"✅ YOLO分割模型加载成功: {model_path}")
+                return True
+            else:
+                return False
+        else:
+            # 加载普通检测模型
+            model = YOLO(model_path)
+            seg_handler = None
+            current_model_type = 'detection'
+            current_model_path = model_path
+            print(f"✅ YOLO检测模型加载成功: {model_path}")
+            return True
     except Exception as e:
         print(f"❌ YOLO模型加载失败: {e}")
         return False
@@ -450,7 +468,10 @@ def get_model_files(directory='models'):
     
     # 添加预训练模型选项
     pretrained_models = [
-        {'name': 'YOLOv8n (Nano)', 'path': 'yolov8n.pt', 'relative_path': 'yolov8n.pt', 'size': 0, 'size_mb': 6.2, 'modified': 0, 'pretrained': True}
+        {'name': 'YOLOv8n (检测)', 'path': 'yolov8n.pt', 'relative_path': 'yolov8n.pt', 'size': 0, 'size_mb': 6.2, 'modified': 0, 'pretrained': True, 'type': 'detection'},
+        {'name': 'YOLOv8n-seg (分割)', 'path': 'yolov8n-seg.pt', 'relative_path': 'yolov8n-seg.pt', 'size': 0, 'size_mb': 6.7, 'modified': 0, 'pretrained': True, 'type': 'segmentation'},
+        {'name': 'YOLOv8s-seg (分割)', 'path': 'yolov8s-seg.pt', 'relative_path': 'yolov8s-seg.pt', 'size': 0, 'size_mb': 22.5, 'modified': 0, 'pretrained': True, 'type': 'segmentation'},
+        {'name': 'YOLOv8m-seg (分割)', 'path': 'yolov8m-seg.pt', 'relative_path': 'yolov8m-seg.pt', 'size': 0, 'size_mb': 49.9, 'modified': 0, 'pretrained': True, 'type': 'segmentation'}
     ]
     
     return pretrained_models + model_files
@@ -506,6 +527,10 @@ def detect_image():
     
     file = request.files['file']
     user_id = request.form.get('user_id', 1)
+    use_segmentation = request.form.get('use_segmentation', 'false').lower() == 'true'
+    show_masks = request.form.get('show_masks', 'true').lower() == 'true'
+    show_boxes = request.form.get('show_boxes', 'true').lower() == 'true'
+    mask_alpha = float(request.form.get('mask_alpha', 0.4))
     
     if file.filename == '':
         return jsonify({'success': False, 'message': '没有选择文件'}), 400
@@ -517,32 +542,61 @@ def detect_image():
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(filepath)
         
-        # 进行YOLO检测
+        # 根据模型类型和用户选择进行检测或分割
         try:
-            results = model(filepath)
-            
-            # 处理检测结果
-            detections = []
             img = cv2.imread(filepath)
+            detections = []
+            segmentation_results = None
             
-            for r in results:
-                boxes = r.boxes
-                if boxes is not None:
-                    for box in boxes:
-                        x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-                        conf = box.conf[0].cpu().numpy()
-                        cls = box.cls[0].cpu().numpy()
-                        
+            if use_segmentation and current_model_type == 'segmentation' and seg_handler:
+                # 使用分割模型
+                seg_results = seg_handler.predict(img)
+                if seg_results:
+                    result = seg_results[0]
+                    segmentation_results = result
+                    
+                    # 转换为标准检测格式
+                    for i, (box, conf, cls, cls_name) in enumerate(zip(
+                        result.get('boxes', []),
+                        result.get('confidences', []),
+                        result.get('classes', []),
+                        result.get('class_names', [])
+                    )):
                         detections.append({
-                            'class': model.names[int(cls)],
+                            'class': cls_name,
                             'confidence': float(conf),
-                            'bbox': [float(x1), float(y1), float(x2), float(y2)]
+                            'bbox': box,
+                            'has_mask': i < len(result.get('masks', []))
                         })
-                        
-                        # 在图像上绘制检测框
-                        cv2.rectangle(img, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
-                        cv2.putText(img, f'{model.names[int(cls)]}: {conf:.2f}', 
-                                  (int(x1), int(y1)-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                    
+                    # 生成可视化结果
+                    img = seg_handler.visualize_segmentation(
+                        img, result, show_boxes, show_masks, True, mask_alpha
+                    )
+                
+            else:
+                # 使用普通检测模型
+                results = model(filepath)
+                
+                for r in results:
+                    boxes = r.boxes
+                    if boxes is not None:
+                        for box in boxes:
+                            x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                            conf = box.conf[0].cpu().numpy()
+                            cls = box.cls[0].cpu().numpy()
+                            
+                            detections.append({
+                                'class': model.names[int(cls)],
+                                'confidence': float(conf),
+                                'bbox': [float(x1), float(y1), float(x2), float(y2)],
+                                'has_mask': False
+                            })
+                            
+                            # 在图像上绘制检测框
+                            cv2.rectangle(img, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
+                            cv2.putText(img, f'{model.names[int(cls)]}: {conf:.2f}', 
+                                      (int(x1), int(y1)-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
             
             # 保存结果图像
             result_filename = 'result_' + filename
@@ -561,13 +615,24 @@ def detect_image():
             db.session.add(detection_result)
             db.session.commit()
             
-            return jsonify({
+            response_data = {
                 'success': True,
-                'message': '检测完成',
+                'message': '检测完成' if not use_segmentation else '分割检测完成',
                 'detections': detections,
                 'result_image': f'/static/{result_filename}',
-                'detection_count': len(detections)
-            })
+                'detection_count': len(detections),
+                'model_type': current_model_type,
+                'used_segmentation': use_segmentation and current_model_type == 'segmentation'
+            }
+            
+            # 如果是分割结果，添加分割信息
+            if segmentation_results:
+                response_data['segmentation_results'] = {
+                    'masks_count': len(segmentation_results.get('masks', [])),
+                    'segments_count': len(segmentation_results.get('segments', []))
+                }
+            
+            return jsonify(response_data)
             
         except Exception as e:
             return jsonify({'success': False, 'message': f'检测失败: {str(e)}'}), 500
@@ -1363,8 +1428,10 @@ def get_current_model():
         model_info = {
             'path': current_model_path,
             'loaded': model is not None,
+            'type': current_model_type,
             'classes': list(model.names.values()) if model else [],
-            'class_count': len(model.names) if model else 0
+            'class_count': len(model.names) if model else 0,
+            'supports_segmentation': current_model_type == 'segmentation'
         }
         
         return jsonify({
@@ -1374,6 +1441,216 @@ def get_current_model():
         
     except Exception as e:
         return jsonify({'success': False, 'message': f'获取模型信息失败: {str(e)}'}), 500
+
+@app.route('/api/segment_image', methods=['POST'])
+def segment_image():
+    """专门的图像分割接口"""
+    if 'file' not in request.files:
+        return jsonify({'success': False, 'message': '没有上传文件'}), 400
+    
+    file = request.files['file']
+    user_id = request.form.get('user_id', 1)
+    show_masks = request.form.get('show_masks', 'true').lower() == 'true'
+    show_boxes = request.form.get('show_boxes', 'true').lower() == 'true'
+    show_labels = request.form.get('show_labels', 'true').lower() == 'true'
+    mask_alpha = float(request.form.get('mask_alpha', 0.4))
+    conf_threshold = float(request.form.get('conf_threshold', 0.25))
+    iou_threshold = float(request.form.get('iou_threshold', 0.45))
+    
+    if file.filename == '':
+        return jsonify({'success': False, 'message': '没有选择文件'}), 400
+    
+    # 检查是否加载了分割模型
+    if current_model_type != 'segmentation' or not seg_handler:
+        return jsonify({
+            'success': False, 
+            'message': '当前未加载分割模型，请先加载YOLO分割模型（如yolov8n-seg.pt）'
+        }), 400
+    
+    if file and allowed_file(file.filename):
+        filename = secure_filename(file.filename)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_')
+        filename = timestamp + filename
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file.save(filepath)
+        
+        try:
+            img = cv2.imread(filepath)
+            
+            # 执行分割预测
+            seg_results = seg_handler.predict(img, conf=conf_threshold, iou=iou_threshold)
+            
+            if not seg_results:
+                return jsonify({
+                    'success': True,
+                    'message': '未检测到任何目标',
+                    'detections': [],
+                    'segmentation_results': {'masks_count': 0, 'segments_count': 0},
+                    'result_image': None
+                })
+            
+            result = seg_results[0]
+            
+            # 生成可视化结果
+            vis_img = seg_handler.visualize_segmentation(
+                img, result, show_boxes, show_masks, show_labels, mask_alpha
+            )
+            
+            # 保存结果图像
+            result_filename = 'seg_result_' + filename
+            result_filepath = os.path.join('static', result_filename)
+            cv2.imwrite(result_filepath, vis_img)
+            
+            # 转换为标准检测格式
+            detections = []
+            for i, (box, conf, cls, cls_name) in enumerate(zip(
+                result.get('boxes', []),
+                result.get('confidences', []),
+                result.get('classes', []),
+                result.get('class_names', [])
+            )):
+                detections.append({
+                    'class': cls_name,
+                    'confidence': float(conf),
+                    'bbox': box,
+                    'has_mask': i < len(result.get('masks', [])),
+                    'mask_area': None  # 可以计算掩码面积
+                })
+            
+            # 保存到数据库
+            detection_result = DetectionResult(
+                user_id=user_id,
+                detection_type='image_segmentation',
+                original_file=filename,
+                result_file=result_filename,
+                detections=json.dumps(detections),
+                confidence=max([d['confidence'] for d in detections]) if detections else 0
+            )
+            db.session.add(detection_result)
+            db.session.commit()
+            
+            return jsonify({
+                'success': True,
+                'message': '图像分割完成',
+                'detections': detections,
+                'segmentation_results': {
+                    'masks_count': len(result.get('masks', [])),
+                    'segments_count': len(result.get('segments', [])),
+                    'total_objects': len(detections)
+                },
+                'result_image': f'/static/{result_filename}',
+                'model_type': 'segmentation',
+                'visualization_settings': {
+                    'show_masks': show_masks,
+                    'show_boxes': show_boxes,
+                    'show_labels': show_labels,
+                    'mask_alpha': mask_alpha
+                }
+            })
+            
+        except Exception as e:
+            return jsonify({'success': False, 'message': f'分割失败: {str(e)}'}), 500
+    
+    return jsonify({'success': False, 'message': '不支持的文件格式'}), 400
+
+@app.route('/api/segment_video', methods=['POST'])
+def segment_video():
+    """视频分割接口"""
+    if 'file' not in request.files:
+        return jsonify({'success': False, 'message': '没有上传文件'}), 400
+    
+    file = request.files['file']
+    user_id = request.form.get('user_id', 1)
+    show_masks = request.form.get('show_masks', 'true').lower() == 'true'
+    show_boxes = request.form.get('show_boxes', 'true').lower() == 'true'
+    show_labels = request.form.get('show_labels', 'true').lower() == 'true'
+    mask_alpha = float(request.form.get('mask_alpha', 0.4))
+    conf_threshold = float(request.form.get('conf_threshold', 0.25))
+    iou_threshold = float(request.form.get('iou_threshold', 0.45))
+    
+    if file.filename == '':
+        return jsonify({'success': False, 'message': '没有选择文件'}), 400
+    
+    # 检查是否加载了分割模型
+    if current_model_type != 'segmentation' or not seg_handler:
+        return jsonify({
+            'success': False, 
+            'message': '当前未加载分割模型，请先加载YOLO分割模型（如yolov8n-seg.pt）'
+        }), 400
+    
+    if file and allowed_video_file(file.filename):
+        filename = secure_filename(file.filename)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_')
+        original_name, original_ext = os.path.splitext(filename)
+        input_filename = timestamp + filename
+        output_filename = 'seg_result_' + timestamp + original_name + '.mp4'
+        
+        input_filepath = os.path.join(app.config['UPLOAD_FOLDER'], input_filename)
+        output_filepath = os.path.join('static', output_filename)
+        
+        file.save(input_filepath)
+        
+        try:
+            # 使用分割处理器处理视频
+            def progress_callback(progress, current_frame, total_frames):
+                print(f"🎬 分割进度: {progress:.1f}% ({current_frame}/{total_frames})")
+            
+            result_stats = seg_handler.process_video_segmentation(
+                input_filepath, output_filepath,
+                conf=conf_threshold, iou=iou_threshold,
+                show_boxes=show_boxes, show_masks=show_masks, 
+                show_labels=show_labels, mask_alpha=mask_alpha,
+                progress_callback=progress_callback
+            )
+            
+            # 转换结果格式
+            all_detections = []
+            for frame_result in result_stats['results']:
+                if frame_result['result'] and 'boxes' in frame_result['result']:
+                    for i, (box, conf, cls, cls_name) in enumerate(zip(
+                        frame_result['result'].get('boxes', []),
+                        frame_result['result'].get('confidences', []),
+                        frame_result['result'].get('classes', []),
+                        frame_result['result'].get('class_names', [])
+                    )):
+                        all_detections.append({
+                            'frame': frame_result['frame'],
+                            'class': cls_name,
+                            'confidence': float(conf),
+                            'bbox': box,
+                            'has_mask': i < len(frame_result['result'].get('masks', []))
+                        })
+            
+            # 保存到数据库
+            detection_result = DetectionResult(
+                user_id=user_id,
+                detection_type='video_segmentation',
+                original_file=input_filename,
+                result_file=output_filename,
+                detections=json.dumps(all_detections),
+                confidence=max([d['confidence'] for d in all_detections]) if all_detections else 0
+            )
+            db.session.add(detection_result)
+            db.session.commit()
+            
+            return jsonify({
+                'success': True,
+                'message': f'视频分割完成！处理了 {result_stats["total_frames"]} 帧',
+                'result_video': f'/static/{output_filename}',
+                'segmentation_stats': {
+                    'total_frames': result_stats['total_frames'],
+                    'total_detections': result_stats['total_detections'],
+                    'total_masks': result_stats['total_masks'],
+                    'average_detections_per_frame': result_stats['average_detections_per_frame']
+                },
+                'detections': all_detections,
+                'model_type': 'segmentation'
+            })
+            
+        except Exception as e:
+            return jsonify({'success': False, 'message': f'视频分割失败: {str(e)}'}), 500
+    
+    return jsonify({'success': False, 'message': '不支持的视频格式'}), 400
 
 @app.route('/api/models/upload', methods=['POST'])
 def upload_model():

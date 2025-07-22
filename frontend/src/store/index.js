@@ -171,6 +171,61 @@ export default createStore({
           message: error.response?.data?.message || '重置跟踪器失败' 
         }
       }
+    },
+    async segmentImage({ commit, state }, formData) {
+      try {
+        commit('SET_LOADING', true)
+        formData.append('user_id', state.user.id)
+        const response = await axios.post(`${API_BASE_URL}/segment_image`, formData, {
+          headers: {
+            'Content-Type': 'multipart/form-data'
+          }
+        })
+        if (response.data.success) {
+          commit('SET_DETECTION_RESULTS', response.data)
+        }
+        return response.data
+      } catch (error) {
+        return { 
+          success: false, 
+          message: error.response?.data?.message || '图片分割失败' 
+        }
+      } finally {
+        commit('SET_LOADING', false)
+      }
+    },
+    async segmentVideo({ commit, state }, formData) {
+      try {
+        commit('SET_LOADING', true)
+        formData.append('user_id', state.user.id)
+        const response = await axios.post(`${API_BASE_URL}/segment_video`, formData, {
+          headers: {
+            'Content-Type': 'multipart/form-data'
+          }
+        })
+        if (response.data.success) {
+          commit('SET_DETECTION_RESULTS', response.data)
+        }
+        return response.data
+      } catch (error) {
+        return { 
+          success: false, 
+          message: error.response?.data?.message || '视频分割失败' 
+        }
+      } finally {
+        commit('SET_LOADING', false)
+      }
+    },
+    async getCurrentModel() {
+      try {
+        const response = await axios.get(`${API_BASE_URL}/models/current`)
+        return response.data
+      } catch (error) {
+        return { 
+          success: false, 
+          message: error.response?.data?.message || '获取模型信息失败' 
+        }
+      }
     }
   }
 }) 
