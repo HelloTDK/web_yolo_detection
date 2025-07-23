@@ -30,6 +30,11 @@
             <span>预警记录</span>
           </el-menu-item>
           
+          <el-menu-item index="/dashboard/watermark-removal">
+            <el-icon><MagicStick /></el-icon>
+            <span>去除水印</span>
+          </el-menu-item>
+          
           <el-menu-item index="/dashboard/models">
             <el-icon><Setting /></el-icon>
             <span>模型管理</span>
@@ -86,7 +91,8 @@ import {
   User, 
   ArrowDown,
   Setting,
-  Warning
+  Warning,
+  MagicStick
 } from '@element-plus/icons-vue'
 
 export default {
@@ -98,7 +104,8 @@ export default {
     User,
     ArrowDown,
     Setting,
-    Warning
+    Warning,
+    MagicStick
   },
   mounted() {
     // 初始化认证状态
@@ -115,6 +122,7 @@ export default {
         '/dashboard/detection': '目标检测',
         '/dashboard/history': '检测历史',
         '/dashboard/alerts': '预警记录',
+        '/dashboard/watermark-removal': '去除水印',
         '/dashboard/models': '模型管理'
       }
       return routeMap[this.$route.path] || '检测系统'

@@ -373,7 +373,19 @@
             <div v-if="detectionResult.detections && detectionResult.detections.length > 0" class="detection-list">
               <h4>检测详情</h4>
               <el-table :data="detectionResult.detections" style="width: 100%" size="small" max-height="300">
-                <el-table-column prop="class" label="类别" width="120" />
+                <el-table-column prop="class" label="类别" width="120">
+                  <template #default="scope">
+                    <el-tag 
+                      :type="isWatermarkClass(scope.row.class) ? 'warning' : 'primary'"
+                      effect="light"
+                    >
+                      {{ scope.row.class }}
+                      <el-icon v-if="isWatermarkClass(scope.row.class)" style="margin-left: 4px;">
+                        <Warning />
+                      </el-icon>
+                    </el-tag>
+                  </template>
+                </el-table-column>
                 <el-table-column label="置信度" width="100">
                   <template #default="scope">
                     <el-progress 
@@ -392,6 +404,19 @@
                 <el-table-column label="帧数" v-if="detectionMode === 'video'" width="80">
                   <template #default="scope">
                     {{ scope.row.frame || '--' }}
+                  </template>
+                </el-table-column>
+                <el-table-column label="操作" width="120">
+                  <template #default="scope">
+                    <el-button 
+                      v-if="isWatermarkClass(scope.row.class)"
+                      type="warning"
+                      size="mini"
+                      @click="handleWatermarkRemoval(scope.row)"
+                    >
+                      <el-icon><MagicStick /></el-icon>
+                      去除
+                    </el-button>
                   </template>
                 </el-table-column>
               </el-table>
@@ -593,7 +618,8 @@ import {
   ZoomIn,
   ZoomOut,
   Download,
-  Warning
+  Warning,
+  MagicStick
 } from '@element-plus/icons-vue'
 
 export default {
@@ -608,7 +634,8 @@ export default {
     ZoomIn,
     ZoomOut,
     Download,
-    Warning
+    Warning,
+    MagicStick
   },
   data() {
     return {
@@ -1555,6 +1582,47 @@ export default {
       if (percentage >= 60) return '#409eff'
       if (percentage >= 40) return '#e6a23c'
       return '#f56c6c'
+    },
+    
+    // 水印相关方法
+    isWatermarkClass(className) {
+      // 定义水印相关的类别关键词
+      const watermarkKeywords = [
+        'watermark', 'logo', 'text', 'brand', 'copyright', 
+        '水印', '商标', '版权', '标识', 'signature'
+      ]
+      
+      const lowerClassName = className.toLowerCase()
+      return watermarkKeywords.some(keyword => lowerClassName.includes(keyword))
+    },
+    
+    async handleWatermarkRemoval(detection) {
+      try {
+        // 确认用户是否要去除水印
+        await this.$confirm(
+          `检测到水印类别："${detection.class}"，是否要跳转到去除水印页面进行处理？`,
+          '水印检测',
+          {
+            confirmButtonText: '去除水印',
+            cancelButtonText: '取消',
+            type: 'warning',
+            customClass: 'watermark-confirm-dialog'
+          }
+        )
+        
+        // 跳转到去除水印页面
+        this.$router.push('/dashboard/watermark-removal')
+        
+        // 显示提示信息
+        this.$message({
+          message: '已跳转到去除水印页面，请上传包含水印的文件进行处理',
+          type: 'success',
+          duration: 3000
+        })
+        
+      } catch {
+        // 用户取消操作
+      }
     }
   },
   
@@ -2053,5 +2121,72 @@ export default {
 
 .class-counts :deep(.el-progress-bar) {
   margin-bottom: 2px;
+}
+
+/* 水印相关样式 */
+:deep(.watermark-confirm-dialog) {
+  border-radius: 12px;
+}
+
+:deep(.watermark-confirm-dialog .el-message-box__title) {
+  color: #e6a23c;
+  font-weight: 600;
+}
+
+:deep(.watermark-confirm-dialog .el-message-box__content) {
+  padding: 20px 24px;
+}
+
+:deep(.watermark-confirm-dialog .el-button--primary) {
+  background: linear-gradient(45deg, #e6a23c, #f39c12);
+  border: none;
+  border-radius: 6px;
+  transition: all 0.3s ease;
+}
+
+:deep(.watermark-confirm-dialog .el-button--primary:hover) {
+  background: linear-gradient(45deg, #d68910, #e67e22);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(230, 162, 60, 0.4);
+}
+
+/* 水印检测结果的特殊样式 */
+.detection-list :deep(.el-table__row) {
+  transition: all 0.3s ease;
+}
+
+.detection-list :deep(.el-table__row:hover) {
+  background-color: #fef9e7;
+}
+
+.detection-list .el-tag.el-tag--warning {
+  background: linear-gradient(45deg, #fff7e6, #fef2d0);
+  border: 1px solid #f0c14b;
+  color: #d68910;
+  animation: watermarkPulse 2s infinite;
+}
+
+@keyframes watermarkPulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(240, 193, 75, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(240, 193, 75, 0.1);
+  }
+}
+
+.detection-list .el-button--warning {
+  background: linear-gradient(45deg, #e6a23c, #f39c12);
+  border: none;
+  border-radius: 4px;
+  font-size: 12px;
+  padding: 4px 8px;
+  transition: all 0.3s ease;
+}
+
+.detection-list .el-button--warning:hover {
+  background: linear-gradient(45deg, #d68910, #e67e22);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(230, 162, 60, 0.4);
 }
 </style> 

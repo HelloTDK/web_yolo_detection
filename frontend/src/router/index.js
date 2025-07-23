@@ -5,6 +5,7 @@ import Detection from '../views/Detection.vue'
 import History from '../views/History.vue'
 import ModelManager from '../views/ModelManager.vue'
 import AlertRecord from '../views/AlertRecord.vue'
+import WatermarkRemoval from '../views/WatermarkRemoval.vue'
 
 const routes = [
   {
@@ -44,6 +45,11 @@ const routes = [
         path: 'alerts',
         name: 'AlertRecord',
         component: AlertRecord
+      },
+      {
+        path: 'watermark-removal',
+        name: 'WatermarkRemoval',
+        component: WatermarkRemoval
       }
     ]
   }
