@@ -265,8 +265,37 @@
                   <div v-if="trackingSettings.enableAlert" class="alert-info">
                     <el-text type="warning" size="small">
                       <el-icon><Warning /></el-icon>
-                      新目标出现时将自动保存预警帧并记录
+                      新目标出现时将自动保存预警帧并记录，同时播放提示音
                     </el-text>
+                  </div>
+                </el-form-item>
+                
+                <!-- 新增：预警提示音设置 -->
+                <el-form-item label="预警提示音" v-if="trackingSettings.enableAlert">
+                  <el-switch 
+                    v-model="alertSettings.enableSound" 
+                    @change="onAlertSettingsChange"
+                  />
+                  <div class="setting-desc">
+                    新目标出现时播放提示音
+                  </div>
+                  
+                  <div v-if="alertSettings.enableSound" class="alert-sound-settings">
+                    <el-form-item label="音量" label-width="60px" style="margin-top: 10px;">
+                      <el-slider 
+                        v-model="alertSettings.volume" 
+                        :min="0" 
+                        :max="100" 
+                        :step="5"
+                        show-input
+                        size="small"
+                        style="width: 150px;"
+                      />
+                    </el-form-item>
+                    <el-button size="small" @click="testAlertSound">
+                      <el-icon><Promotion /></el-icon>
+                      测试音效
+                    </el-button>
                   </div>
                 </el-form-item>
                 
@@ -326,11 +355,89 @@
                 <el-tag v-if="detectionResult.counting_results || currentCounts" type="info">
                   当前屏幕: {{ getCurrentScreenCount() }}
                 </el-tag>
+                <!-- 新增：预警统计标签 -->
+                <el-tag v-if="realtimeAlerts.length > 0" type="danger">
+                  预警: {{ realtimeAlerts.length }}
+                </el-tag>
               </div>
             </div>
           </template>
           
           <div class="result-content">
+            <!-- 新增：实时预警显示区域 -->
+            <div v-if="detectionMode === 'camera' && trackingSettings.enableAlert && realtimeAlerts.length > 0" class="realtime-alerts">
+              <h4 class="alerts-title">
+                <el-icon class="alert-icon"><Warning /></el-icon>
+                实时预警 ({{ realtimeAlerts.length }})
+              </h4>
+              <div class="alerts-container">
+                <div 
+                  v-for="(alert, index) in realtimeAlerts.slice(0, 3)" 
+                  :key="`alert-${alert.id}-${index}`"
+                  class="alert-item"
+                  :class="{ 'alert-new': alert.isNew }"
+                >
+                  <div class="alert-image-container">
+                    <img 
+                      v-if="alert.frameImage" 
+                      :src="alert.frameImage" 
+                      class="alert-frame-image"
+                      @click="openAlertPreview(alert)"
+                      alt="预警帧"
+                    >
+                    <div class="alert-overlay">
+                      <el-button type="danger" size="small" @click="openAlertPreview(alert)">
+                        <el-icon><ZoomIn /></el-icon>
+                        查看详情
+                      </el-button>
+                    </div>
+                  </div>
+                  <div class="alert-info">
+                    <div class="alert-header">
+                      <el-tag type="danger" size="small">
+                        新目标 ID:{{ alert.targetId }}
+                      </el-tag>
+                      <span class="alert-time">{{ formatAlertTime(alert.timestamp) }}</span>
+                    </div>
+                    <div class="alert-details">
+                      <span class="alert-class">{{ alert.targetClass }}</span>
+                      <span class="alert-confidence">置信度: {{ (alert.confidence * 100).toFixed(1) }}%</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              
+              <!-- 显示更多预警的按钮 -->
+              <div v-if="realtimeAlerts.length > 3" class="more-alerts">
+                <el-button size="small" type="text" @click="showAllAlerts = !showAllAlerts">
+                  {{ showAllAlerts ? '收起' : `查看全部 ${realtimeAlerts.length} 条预警` }}
+                  <el-icon><ArrowUp v-if="showAllAlerts" /><ArrowDown v-else /></el-icon>
+                </el-button>
+              </div>
+              
+              <!-- 展开显示所有预警 -->
+              <div v-if="showAllAlerts && realtimeAlerts.length > 3" class="all-alerts">
+                <div 
+                  v-for="(alert, index) in realtimeAlerts.slice(3)" 
+                  :key="`all-alert-${alert.id}-${index}`"
+                  class="alert-item-compact"
+                >
+                  <img 
+                    v-if="alert.frameImage" 
+                    :src="alert.frameImage" 
+                    class="alert-frame-image-small"
+                    @click="openAlertPreview(alert)"
+                    alt="预警帧"
+                  >
+                  <div class="alert-info-compact">
+                    <el-tag type="danger" size="small">ID:{{ alert.targetId }}</el-tag>
+                    <span>{{ alert.targetClass }}</span>
+                    <span class="alert-time">{{ formatAlertTime(alert.timestamp) }}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            
             <!-- 检测结果图片 -->
             <div v-if="detectionResult.result_image && (detectionMode === 'image' || detectionMode === 'image_seg')" class="result-media">
               <img 
@@ -499,6 +606,59 @@
       </el-col>
     </el-row>
     
+    <!-- 预警帧详情对话框 -->
+    <el-dialog
+      v-model="showAlertPreview"
+      title="预警详情"
+      width="70%"
+      top="5vh"
+      destroy-on-close
+      @close="closeAlertPreview"
+    >
+      <div v-if="selectedAlert" class="alert-preview-container">
+        <div class="alert-preview-header">
+          <div class="alert-preview-info">
+            <el-tag type="danger" size="large">
+              <el-icon><Warning /></el-icon>
+              新目标预警 ID:{{ selectedAlert.targetId }}
+            </el-tag>
+            <div class="alert-meta">
+              <span class="alert-class-large">{{ selectedAlert.targetClass }}</span>
+              <span class="alert-confidence-large">置信度: {{ (selectedAlert.confidence * 100).toFixed(1) }}%</span>
+              <span class="alert-time-large">{{ formatAlertTime(selectedAlert.timestamp, true) }}</span>
+            </div>
+          </div>
+        </div>
+        
+        <div class="alert-preview-image">
+          <img 
+            :src="selectedAlert.frameImage" 
+            class="alert-frame-large"
+            alt="预警帧详情"
+          >
+          <div class="alert-image-controls">
+            <el-button @click="downloadAlertFrame">
+              <el-icon><Download /></el-icon>
+              下载预警帧
+            </el-button>
+          </div>
+        </div>
+        
+        <div class="alert-preview-details">
+          <h4>目标信息</h4>
+          <el-descriptions :column="2" border>
+            <el-descriptions-item label="目标ID">{{ selectedAlert.targetId }}</el-descriptions-item>
+            <el-descriptions-item label="目标类别">{{ selectedAlert.targetClass }}</el-descriptions-item>
+            <el-descriptions-item label="检测置信度">{{ (selectedAlert.confidence * 100).toFixed(2) }}%</el-descriptions-item>
+            <el-descriptions-item label="预警时间">{{ formatAlertTime(selectedAlert.timestamp, true) }}</el-descriptions-item>
+            <el-descriptions-item label="边界框坐标" span="2">
+              {{ formatBbox(selectedAlert.bbox) }}
+            </el-descriptions-item>
+          </el-descriptions>
+        </div>
+      </div>
+    </el-dialog>
+    
     <!-- 图片预览对话框 -->
     <el-dialog
       v-model="showImagePreview"
@@ -578,11 +738,20 @@
         </div>
       </div>
     </el-dialog>
+    
+    <!-- 隐藏的音频元素用于播放提示音 -->
+    <audio 
+      ref="alertAudio" 
+      preload="auto"
+      style="display: none;"
+    >
+      您的浏览器不支持音频播放
+    </audio>
   </div>
 </template>
 
 <script>
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElNotification } from 'element-plus'
 import { 
   Picture, 
   VideoPlay, 
@@ -593,7 +762,10 @@ import {
   ZoomIn,
   ZoomOut,
   Download,
-  Warning
+  Warning,
+  Promotion,
+  ArrowUp,
+  ArrowDown
 } from '@element-plus/icons-vue'
 
 export default {
@@ -608,7 +780,10 @@ export default {
     ZoomIn,
     ZoomOut,
     Download,
-    Warning
+    Warning,
+    Promotion,
+    ArrowUp,
+    ArrowDown
   },
   data() {
     return {
@@ -669,6 +844,15 @@ export default {
         currentPage: 1,
         pageSize: 10,
         total: 0
+      },
+      // 新增预警相关数据
+      realtimeAlerts: [],
+      showAlertPreview: false,
+      selectedAlert: null,
+      showAllAlerts: false,
+      alertSettings: {
+        enableSound: true,
+        volume: 50
       }
     }
   },
@@ -740,12 +924,20 @@ export default {
     // 监听检测结果变化
     detectionResult() {
       this.updateClassCounts()
+    },
+
+    // 监听预警数据变化
+    realtimeAlerts() {
+      this.updateClassCounts() // 预警也会影响计数统计
     }
   },
   
   async mounted() {
     // 加载可用类别
     await this.loadAvailableClasses()
+    
+    // 初始化预警音效
+    this.initAlertSound()
   },
   methods: {
     getModeTitle() {
@@ -855,6 +1047,113 @@ export default {
       } catch (error) {
         console.error('加载类别失败:', error)
       }
+    },
+
+    // 初始化预警音效
+    initAlertSound() {
+      try {
+        // 使用Web Audio API生成预警音效
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)()
+        const duration = 0.5 // 0.5秒
+        const sampleRate = audioContext.sampleRate
+        const frameCount = duration * sampleRate
+        
+        const audioBuffer = audioContext.createBuffer(1, frameCount, sampleRate)
+        const channelData = audioBuffer.getChannelData(0)
+        
+        // 生成警报音（双音调）
+        for (let i = 0; i < frameCount; i++) {
+          const t = i / sampleRate
+          let frequency = 800 // 基础频率
+          
+          // 在0.25秒时切换到1000Hz，创建警报效果
+          if (t > 0.25) {
+            frequency = 1000
+          }
+          
+          // 生成音调，带有淡入淡出效果
+          const amplitude = Math.sin(Math.PI * t / duration) * 0.3 // 淡入淡出包络
+          channelData[i] = Math.sin(2 * Math.PI * frequency * t) * amplitude
+        }
+        
+        // 将AudioBuffer转换为Blob URL
+        const wavArrayBuffer = this.audioBufferToWav(audioBuffer)
+        const blob = new Blob([wavArrayBuffer], { type: 'audio/wav' })
+        const audioUrl = URL.createObjectURL(blob)
+        
+        // 设置音频源
+        if (this.$refs.alertAudio) {
+          this.$refs.alertAudio.src = audioUrl
+        }
+        
+        console.log('✅ 预警音效初始化成功')
+      } catch (error) {
+        console.error('❌ 预警音效初始化失败:', error)
+        // 如果生成失败，使用简单的音频数据URI作为后备
+        this.setFallbackAlertSound()
+      }
+    },
+
+    // 设置后备预警音效
+    setFallbackAlertSound() {
+      // 使用简单的音频数据URI作为后备方案
+      const audioDataUri = 'data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmEcBJ2bv/HAciUFJHfH8N2QQAoSXbPj66lWFAlFnt/yvmEcBJ2bv/HAciUFJHfH8N2QQAoTXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/'
+      
+      if (this.$refs.alertAudio) {
+        this.$refs.alertAudio.src = audioDataUri
+      }
+    },
+
+    // 将AudioBuffer转换为WAV格式
+    audioBufferToWav(buffer) {
+      const length = buffer.length
+      const numberOfChannels = buffer.numberOfChannels
+      const sampleRate = buffer.sampleRate
+      const arrayBuffer = new ArrayBuffer(44 + length * 2)
+      const view = new DataView(arrayBuffer)
+      
+      // WAV文件头
+      let offset = 0
+      const writeString = (str) => {
+        for (let i = 0; i < str.length; i++) {
+          view.setUint8(offset + i, str.charCodeAt(i))
+        }
+        offset += str.length
+      }
+      
+      const writeUint32 = (value) => {
+        view.setUint32(offset, value, true)
+        offset += 4
+      }
+      
+      const writeUint16 = (value) => {
+        view.setUint16(offset, value, true)
+        offset += 2
+      }
+      
+      writeString('RIFF')
+      writeUint32(36 + length * 2)
+      writeString('WAVE')
+      writeString('fmt ')
+      writeUint32(16)
+      writeUint16(1)
+      writeUint16(numberOfChannels)
+      writeUint32(sampleRate)
+      writeUint32(sampleRate * 2)
+      writeUint16(2)
+      writeUint16(16)
+      writeString('data')
+      writeUint32(length * 2)
+      
+      // 写入音频数据
+      const channelData = buffer.getChannelData(0)
+      for (let i = 0; i < length; i++) {
+        const sample = Math.max(-1, Math.min(1, channelData[i]))
+        view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true)
+        offset += 2
+      }
+      
+      return arrayBuffer
     },
     
     // 跟踪设置变化处理
@@ -1130,6 +1429,10 @@ export default {
       this.realtimeDetections = []
       this.realtimeTrackingResults = []
       this.currentCounts = {}
+      this.realtimeAlerts = [] // 清空预警
+      this.showAllAlerts = false // 收起所有预警
+      this.selectedAlert = null // 关闭预警详情
+      this.showAlertPreview = false // 关闭预警详情对话框
         this.activeRequests = 0
       }
       
@@ -1155,6 +1458,10 @@ export default {
       this.currentCounts = {}
       this.realtimeTrackingResults = []
       this.realtimeDetections = []
+      this.realtimeAlerts = [] // 清空实时预警
+      this.showAllAlerts = false // 收起所有预警
+      this.selectedAlert = null // 关闭预警详情
+      this.showAlertPreview = false // 关闭预警详情对话框
       
       this.detectionInterval = setInterval(async () => {
         // 双重检查：检查摄像头状态和停止标志
@@ -1207,18 +1514,23 @@ export default {
                 this.$nextTick(() => {
                   // 最后一次检查，确保不在停止状态下更新UI
                   if (!this.detectionStopped && this.isCameraActive) {
-                  this.realtimeDetections = result.detections && result.detections.length > 0 ? [...result.detections] : []
-                  this.realtimeTrackingResults = result.tracking_results && result.tracking_results.length > 0 ? [...result.tracking_results] : []
-                  this.currentCounts = result.counting_results ? { ...result.counting_results } : {}
+                    this.realtimeDetections = result.detections && result.detections.length > 0 ? [...result.detections] : []
+                    this.realtimeTrackingResults = result.tracking_results && result.tracking_results.length > 0 ? [...result.tracking_results] : []
+                    this.currentCounts = result.counting_results ? { ...result.counting_results } : {}
+                    
+                    // 处理预警
+                    if (result.new_targets && result.new_targets.length > 0) {
+                      this.handleNewTargetAlerts(result.new_targets)
+                    }
                   }
                 })
               } else {
                 // 如果检测失败，也要检查停止标志
                 this.$nextTick(() => {
                   if (!this.detectionStopped && this.isCameraActive) {
-                  this.realtimeDetections = []
-                  this.realtimeTrackingResults = []
-                  this.currentCounts = {}
+                    this.realtimeDetections = []
+                    this.realtimeTrackingResults = []
+                    this.currentCounts = {}
                   }
                 })
               }
@@ -1511,51 +1823,201 @@ export default {
       
       ElMessage.success('视频下载已开始')
     },
-    
-    // 分页处理
-    handleCountsPageChange(page) {
-      this.countsPagination.currentPage = page
-    },
-    
-    // 更新类别计数
-    updateClassCounts() {
-      // 更新分页总数
-      this.countsPagination.total = this.classCountsTotal
-      
-      // 如果当前页超出范围，重置为第一页
-      if (this.countsPagination.currentPage > Math.ceil(this.classCountsTotal / this.countsPagination.pageSize)) {
-        this.countsPagination.currentPage = 1
+
+    // 预警相关
+    async onAlertSettingsChange() {
+      if (this.alertSettings.enableSound) {
+        this.$refs.alertAudio.volume = this.alertSettings.volume / 100
+        this.$refs.alertAudio.play().catch(e => {
+          console.error('播放预警音效失败:', e)
+          ElMessage.warning('预警音效播放失败，请检查浏览器权限或音频文件')
+        })
+      } else {
+        this.$refs.alertAudio.pause()
+        this.$refs.alertAudio.currentTime = 0
       }
     },
-    
-    // 获取类别标签类型
-    getClassTagType(className) {
-      const tagTypes = {
-        'person': 'primary',
-        'car': 'success',
-        'truck': 'warning',
-        'bus': 'info',
-        'bicycle': 'danger',
-        'motorcycle': 'warning'
-      }
-      return tagTypes[className] || 'info'
+
+    testAlertSound() {
+      this.$refs.alertAudio.volume = this.alertSettings.volume / 100
+      this.$refs.alertAudio.play().then(() => {
+        ElMessage.success('预警音效测试成功！')
+      }).catch(e => {
+        console.error('预警音效测试失败:', e)
+        ElMessage.error('预警音效测试失败，请检查浏览器权限或音频文件')
+      })
     },
-    
-    // 获取计数比例
-    getCountPercentage(count) {
-      if (!this.classCountsData.length) return 0
-      const maxCount = Math.max(...this.classCountsData.map(item => item.cumulativeTotal))
-      return maxCount === 0 ? 0 : Math.round((count / maxCount) * 100)
+
+    openAlertPreview(alert) {
+      this.selectedAlert = alert
+      this.showAlertPreview = true
     },
-    
-    // 获取进度条颜色
-    getProgressColor(count) {
-      const percentage = this.getCountPercentage(count)
-      if (percentage >= 80) return '#67c23a'
-      if (percentage >= 60) return '#409eff'
-      if (percentage >= 40) return '#e6a23c'
-      return '#f56c6c'
-    }
+
+    closeAlertPreview() {
+      this.showAlertPreview = false
+      this.selectedAlert = null
+    },
+
+    downloadAlertFrame() {
+      if (!this.selectedAlert || !this.selectedAlert.frameImage) return
+      const link = document.createElement('a')
+      link.href = this.selectedAlert.frameImage
+      link.download = `预警帧_${this.selectedAlert.targetId}_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.jpg`
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      ElMessage.success('预警帧下载已开始')
+    },
+
+         formatAlertTime(timestamp, isLarge = false) {
+       const date = new Date(timestamp * 1000)
+       const year = date.getFullYear()
+       const month = String(date.getMonth() + 1).padStart(2, '0')
+       const day = String(date.getDate()).padStart(2, '0')
+       const hours = String(date.getHours()).padStart(2, '0')
+       const minutes = String(date.getMinutes()).padStart(2, '0')
+       const seconds = String(date.getSeconds()).padStart(2, '0')
+       const formattedTime = `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
+       return isLarge ? formattedTime : `${hours}:${minutes}:${seconds}`
+     },
+
+     // 处理新目标预警
+     handleNewTargetAlerts(newTargets) {
+       const currentTime = Date.now() / 1000
+       
+       for (const target of newTargets) {
+         // 创建预警记录
+         const alert = {
+           id: `alert-${target.id}-${currentTime}`,
+           targetId: target.id,
+           targetClass: target.class,
+           confidence: target.confidence,
+           bbox: target.bbox,
+           frameImage: this.captureCurrentFrame(), // 捕获当前帧
+           timestamp: currentTime,
+           isNew: true
+         }
+         
+         // 添加到预警列表
+         this.realtimeAlerts.unshift(alert)
+         
+         // 限制预警列表长度，最多保留50条
+         if (this.realtimeAlerts.length > 50) {
+           this.realtimeAlerts = this.realtimeAlerts.slice(0, 50)
+         }
+         
+         // 播放预警音效
+         if (this.alertSettings.enableSound) {
+           this.playAlertSound()
+         }
+         
+         // 显示预警通知
+         this.showAlertNotification(alert)
+         
+         // 标记为非新预警（用于动画效果）
+         setTimeout(() => {
+           const alertIndex = this.realtimeAlerts.findIndex(a => a.id === alert.id)
+           if (alertIndex !== -1) {
+             this.realtimeAlerts[alertIndex].isNew = false
+           }
+         }, 3000)
+       }
+     },
+
+     // 播放预警音效
+     playAlertSound() {
+       if (!this.alertSettings.enableSound || !this.$refs.alertAudio) return
+       
+       try {
+         this.$refs.alertAudio.volume = this.alertSettings.volume / 100
+         this.$refs.alertAudio.currentTime = 0 // 重置播放位置
+         this.$refs.alertAudio.play().catch(e => {
+           console.error('播放预警音效失败:', e)
+         })
+       } catch (error) {
+         console.error('播放预警音效异常:', error)
+       }
+     },
+
+     // 显示预警通知
+     showAlertNotification(alert) {
+       ElNotification({
+         title: '新目标预警',
+         message: `检测到新目标: ${alert.targetClass} (ID: ${alert.targetId})`,
+         type: 'warning',
+         duration: 4000,
+         position: 'top-right',
+         showClose: true,
+         onClick: () => {
+           this.openAlertPreview(alert)
+         }
+       })
+     },
+
+     // 捕获当前摄像头帧
+     captureCurrentFrame() {
+       if (!this.$refs.cameraVideo || !this.$refs.cameraCanvas) return null
+       
+       try {
+         const video = this.$refs.cameraVideo
+         const canvas = this.$refs.cameraCanvas
+         const ctx = canvas.getContext('2d')
+         
+         canvas.width = video.videoWidth
+         canvas.height = video.videoHeight
+         
+         ctx.drawImage(video, 0, 0)
+         return canvas.toDataURL('image/jpeg', 0.8)
+       } catch (error) {
+         console.error('捕获当前帧失败:', error)
+         return null
+       }
+     },
+
+     // 分页处理
+     handleCountsPageChange(page) {
+       this.countsPagination.currentPage = page
+     },
+     
+     // 更新类别计数
+     updateClassCounts() {
+       // 更新分页总数
+       this.countsPagination.total = this.classCountsTotal
+       
+       // 如果当前页超出范围，重置为第一页
+       if (this.countsPagination.currentPage > Math.ceil(this.classCountsTotal / this.countsPagination.pageSize)) {
+         this.countsPagination.currentPage = 1
+       }
+     },
+
+     // 获取类别标签类型
+     getClassTagType(className) {
+       const tagTypes = {
+         'person': 'primary',
+         'car': 'success',
+         'truck': 'warning',
+         'bus': 'info',
+         'bicycle': 'danger',
+         'motorcycle': 'warning'
+       }
+       return tagTypes[className] || 'info'
+     },
+     
+     // 获取计数比例
+     getCountPercentage(count) {
+       if (!this.classCountsData.length) return 0
+       const maxCount = Math.max(...this.classCountsData.map(item => item.cumulativeTotal))
+       return maxCount === 0 ? 0 : Math.round((count / maxCount) * 100)
+     },
+
+     // 获取进度条颜色
+     getProgressColor(count) {
+       const percentage = this.getCountPercentage(count)
+       if (percentage >= 80) return '#67c23a'
+       if (percentage >= 60) return '#409eff'
+       if (percentage >= 40) return '#e6a23c'
+       return '#f56c6c'
+     }
   },
   
   beforeUnmount() {
@@ -1563,6 +2025,18 @@ export default {
     this.detectionStopped = true
     this.silentStopCamera()
     this.resetUpload()
+    
+    // 清理预警相关状态
+    this.realtimeAlerts = []
+    this.showAlertPreview = false
+    this.selectedAlert = null
+    this.showAllAlerts = false
+    
+    // 停止预警音效
+    if (this.$refs.alertAudio) {
+      this.$refs.alertAudio.pause()
+      this.$refs.alertAudio.currentTime = 0
+    }
   }
 }
 </script>
@@ -2054,4 +2528,273 @@ export default {
 .class-counts :deep(.el-progress-bar) {
   margin-bottom: 2px;
 }
-</style> 
+
+/* 实时预警样式 */
+.realtime-alerts {
+  margin-top: 20px;
+  padding: 15px;
+  background: #f8f9fa;
+  border-radius: 8px;
+  border: 1px solid #e9ecef;
+}
+
+.alerts-title {
+  display: flex;
+  align-items: center;
+  margin-bottom: 15px;
+  color: #333;
+  font-weight: 600;
+}
+
+.alerts-title .el-icon {
+  margin-right: 8px;
+  color: #f56c6c;
+}
+
+.alerts-container {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.alert-item {
+  display: flex;
+  align-items: center;
+  background: #fffbe6;
+  border: 1px solid #ffe58f;
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  transition: transform 0.2s ease;
+}
+
+.alert-item:hover {
+  transform: translateY(-2px);
+}
+
+.alert-item.alert-new {
+  border-left: 4px solid #faad14;
+  animation: pulse 1.5s infinite;
+}
+
+.alert-image-container {
+  position: relative;
+  width: 100px;
+  height: 75px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.alert-frame-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.alert-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.alert-item:hover .alert-overlay {
+  opacity: 1;
+}
+
+.alert-info {
+  padding: 10px 15px;
+  flex-grow: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.alert-header {
+  display: flex;
+  align-items: center;
+  margin-bottom: 5px;
+}
+
+.alert-header .el-tag {
+  margin-right: 8px;
+}
+
+.alert-details {
+  font-size: 13px;
+  color: #515a6e;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.alert-class {
+  font-weight: 500;
+  color: #faad14;
+}
+
+.alert-confidence {
+  font-size: 12px;
+  color: #909399;
+}
+
+.more-alerts {
+  text-align: center;
+  margin-top: 10px;
+}
+
+.all-alerts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.alert-item-compact {
+  display: flex;
+  align-items: center;
+  background: #f0f9eb;
+  border: 1px solid #e1f3d8;
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  transition: transform 0.2s ease;
+}
+
+.alert-item-compact:hover {
+  transform: translateY(-2px);
+}
+
+.alert-frame-image-small {
+  width: 50px;
+  height: 38px;
+  object-fit: cover;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.alert-info-compact {
+  padding: 8px 10px;
+  flex-grow: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  font-size: 12px;
+  color: #606266;
+}
+
+.alert-info-compact .el-tag {
+  margin-right: 5px;
+}
+
+.alert-info-compact .el-tag.is-small {
+  font-size: 12px;
+}
+
+.alert-time {
+  font-size: 11px;
+  color: #909399;
+  margin-top: 3px;
+}
+
+ @keyframes pulse {
+   0% {
+     box-shadow: 0 0 0 0 rgba(250, 173, 20, 0.4);
+   }
+   70% {
+     box-shadow: 0 0 0 10px rgba(250, 173, 20, 0);
+   }
+   100% {
+     box-shadow: 0 0 0 0 rgba(250, 173, 20, 0);
+   }
+ }
+
+ /* 预警详情对话框样式 */
+ .alert-preview-container {
+   padding: 20px;
+ }
+
+ .alert-preview-header {
+   margin-bottom: 20px;
+ }
+
+ .alert-preview-info {
+   display: flex;
+   flex-direction: column;
+   gap: 15px;
+ }
+
+ .alert-meta {
+   display: flex;
+   gap: 20px;
+   align-items: center;
+   flex-wrap: wrap;
+ }
+
+ .alert-class-large {
+   font-size: 18px;
+   font-weight: 600;
+   color: #faad14;
+ }
+
+ .alert-confidence-large {
+   font-size: 16px;
+   font-weight: 500;
+   color: #67c23a;
+ }
+
+ .alert-time-large {
+   font-size: 14px;
+   color: #909399;
+ }
+
+ .alert-preview-image {
+   position: relative;
+   text-align: center;
+   margin-bottom: 20px;
+ }
+
+ .alert-frame-large {
+   max-width: 100%;
+   max-height: 400px;
+   border-radius: 8px;
+   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+ }
+
+ .alert-image-controls {
+   margin-top: 15px;
+ }
+
+ .alert-preview-details h4 {
+   margin-bottom: 15px;
+   color: #333;
+   font-weight: 600;
+ }
+
+ /* 预警提示音设置样式 */
+ .alert-sound-settings {
+   margin-top: 10px;
+   padding: 10px;
+   background: #f8f9fa;
+   border-radius: 6px;
+   border: 1px solid #e9ecef;
+ }
+
+ .alert-sound-settings .el-form-item {
+   margin-bottom: 10px;
+ }
+
+ .alert-sound-settings .el-button {
+   margin-top: 5px;
+ }
+ </style> 

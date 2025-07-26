@@ -82,7 +82,7 @@
                 :disabled="scope.row.path === currentModel.path"
                 :loading="loadingModel === scope.row.path"
               >
-                <el-icon><Play /></el-icon>
+                <el-icon><VideoPlay /></el-icon>
                 {{ scope.row.path === currentModel.path ? '使用中' : '加载' }}
               </el-button>
               
@@ -174,7 +174,7 @@ import {
   Refresh, 
   Upload, 
   Star, 
-  Play, 
+  VideoPlay, 
   Delete, 
   UploadFilled 
 } from '@element-plus/icons-vue'
@@ -185,7 +185,7 @@ export default {
     Refresh,
     Upload,
     Star,
-    Play,
+    VideoPlay,
     Delete,
     UploadFilled
   },
