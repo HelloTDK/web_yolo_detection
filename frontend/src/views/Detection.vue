@@ -29,6 +29,10 @@
           <el-icon><Camera /></el-icon>
           摄像头检测
         </el-radio-button>
+        <el-radio-button label="rtsp">
+          <el-icon><VideoPlay /></el-icon>
+          RTSP流检测
+        </el-radio-button>
       </el-radio-group>
     </el-card>
     
@@ -39,29 +43,6 @@
           <template #header>
             <div class="card-header">
               <span>{{ getModeTitle() }}</span>
-              <el-button 
-                v-if="detectionMode === 'camera' && !isCameraActive"
-                type="primary" 
-                @click="startCamera" 
-                :loading="$store.state.isLoading"
-              >
-                启动摄像头
-              </el-button>
-              <el-button 
-                v-if="detectionMode === 'camera' && isCameraActive"
-                type="danger" 
-                @click="stopCamera"
-              >
-                停止摄像头
-              </el-button>
-              <el-button 
-                v-if="detectionMode === 'camera' && isCameraActive && trackingSettings.enableTracking"
-                type="warning" 
-                @click="resetTracking"
-              >
-                <el-icon><RefreshRight /></el-icon>
-                重置跟踪
-              </el-button>
             </div>
           </template>
           
@@ -82,12 +63,9 @@
                 <div class="upload-text">
                   <p>拖拽图片到此处，或<em>点击上传</em></p>
                   <p class="upload-tip">支持 JPG、PNG、GIF 格式，大小不超过 10MB</p>
-                  <p v-if="detectionMode === 'image_seg'" class="upload-tip seg-tip">
-                    🎭 分割模式：将显示详细的目标轮廓和彩色掩码
-                  </p>
                 </div>
               </div>
-              <img v-else :src="imageUrl" class="uploaded-image" alt="上传的图片">
+              <img v-else :src="imageUrl" class="uploaded-image" alt="上传的图片" />
             </el-upload>
           </div>
           
@@ -106,9 +84,6 @@
                 <div class="upload-text">
                   <p>拖拽视频到此处，或<em>点击上传</em></p>
                   <p class="upload-tip">支持 MP4、AVI、MOV 格式，大小不超过 100MB</p>
-                  <p v-if="detectionMode === 'video_seg'" class="upload-tip seg-tip">
-                    🎭 分割模式：将在视频中显示彩色分割掩码
-                  </p>
                 </div>
               </div>
               <video v-else :src="videoUrl" class="uploaded-video" controls>
@@ -119,7 +94,7 @@
           
           <!-- 摄像头 -->
           <div v-if="detectionMode === 'camera'" class="camera-section">
-            <div class="camera-container" :class="{ 'camera-overlay-container': isCameraActive }">
+            <div class="camera-container">
               <video 
                 ref="cameraVideo" 
                 class="camera-video" 
@@ -133,185 +108,137 @@
                 style="display: none;"
               ></canvas>
               
-              <!-- 实时检测框叠加层 -->
-              <div v-if="isCameraActive" class="camera-detection-overlay">
-                <!-- 如果启用跟踪，只显示跟踪框 -->
-                <template v-if="trackingSettings.enableTracking">
-                  <div 
-                    v-for="(track, index) in realtimeTrackingResults" 
-                    :key="`track-${track.id}-${index}`"
-                    class="tracking-box"
-                    :style="getTrackingBoxStyle(track)"
-                  >
-                    <span class="tracking-label">
-                      ID:{{ track.id }} {{ track.class }}: {{ (track.confidence * 100).toFixed(1) }}%
-                    </span>
-                  </div>
-                </template>
-                
-                <!-- 如果没有启用跟踪，只显示检测框 -->
-                <template v-else>
-                  <div 
-                    v-for="(detection, index) in realtimeDetections" 
-                    :key="`detection-${detection.confidence}-${index}`"
-                    class="detection-box"
-                    :style="getDetectionBoxStyle(detection)"
-                  >
-                    <span class="detection-label">
-                      {{ detection.class }}: {{ (detection.confidence * 100).toFixed(1) }}%
-                    </span>
-                  </div>
-                </template>
-              </div>
-              
               <div v-if="!isCameraActive" class="camera-placeholder">
                 <el-icon class="camera-icon"><Camera /></el-icon>
-                <p>点击上方"启动摄像头"开始实时检测</p>
+                <p>点击"启动摄像头"开始实时检测</p>
               </div>
+            </div>
+            
+            <div class="camera-controls">
+              <el-button 
+                v-if="!isCameraActive"
+                type="primary" 
+                @click="startCamera"
+              >
+                启动摄像头
+              </el-button>
+              <el-button 
+                v-if="isCameraActive"
+                type="danger" 
+                @click="stopCamera"
+              >
+                停止摄像头
+              </el-button>
             </div>
           </div>
           
-          <!-- 分割设置 -->
-          <div class="segmentation-controls" v-if="isSegmentationMode">
-            <el-card class="seg-card" shadow="never">
+          <!-- RTSP流检测 -->
+          <div v-if="detectionMode === 'rtsp'" class="rtsp-section">
+            <el-card class="rtsp-manager-card" shadow="never">
               <template #header>
                 <div class="card-header">
-                  <span>分割可视化设置</span>
-                </div>
-              </template>
-              
-              <el-form label-width="100px" size="small">
-                <el-form-item label="显示掩码">
-                  <el-switch v-model="segmentationSettings.showMasks" />
-                  <div class="setting-desc">
-                    显示彩色分割掩码，突出显示目标的精确轮廓
-                  </div>
-                </el-form-item>
-                
-                <el-form-item label="显示边界框">
-                  <el-switch v-model="segmentationSettings.showBoxes" />
-                  <div class="setting-desc">
-                    显示目标检测边界框
-                  </div>
-                </el-form-item>
-                
-                <el-form-item label="显示标签">
-                  <el-switch v-model="segmentationSettings.showLabels" />
-                  <div class="setting-desc">
-                    显示类别名称和置信度
-                  </div>
-                </el-form-item>
-                
-                <el-form-item label="掩码透明度">
-                  <el-slider 
-                    v-model="segmentationSettings.maskAlpha" 
-                    :min="0.1" 
-                    :max="0.9" 
-                    :step="0.1"
-                    show-input
-                    style="width: 200px;"
-                  />
-                  <div class="setting-desc">
-                    调整分割掩码的透明度，值越小掩码越透明
-                  </div>
-                </el-form-item>
-                
-                <el-form-item label="置信度阈值">
-                  <el-slider 
-                    v-model="segmentationSettings.confThreshold" 
-                    :min="0.1" 
-                    :max="0.9" 
-                    :step="0.05"
-                    show-input
-                    style="width: 200px;"
-                  />
-                  <div class="setting-desc">
-                    只显示置信度大于此阈值的检测结果
-                  </div>
-                </el-form-item>
-              </el-form>
-            </el-card>
-          </div>
-          
-          <!-- 跟踪和计数设置 -->
-          <div class="tracking-controls" v-if="detectionMode !== 'image' && detectionMode !== 'image_seg'">
-            <el-card class="tracking-card" shadow="never">
-              <template #header>
-                <div class="card-header">
-                  <span>跟踪和计数设置</span>
-                </div>
-              </template>
-              
-              <el-form label-width="100px" size="small">
-                <el-form-item label="启用跟踪">
-                  <el-switch 
-                    v-model="trackingSettings.enableTracking" 
-                    @change="onTrackingSettingsChange"
-                  />
-                </el-form-item>
-                
-                <el-form-item label="启用计数">
-                  <el-switch 
-                    v-model="trackingSettings.enableCounting" 
-                    @change="onTrackingSettingsChange"
-                  />
-                </el-form-item>
-                
-                <el-form-item label="启用预警" v-if="trackingSettings.enableTracking">
-                  <el-switch 
-                    v-model="trackingSettings.enableAlert" 
-                    @change="onTrackingSettingsChange"
-                  />
-                  <div v-if="trackingSettings.enableAlert" class="alert-info">
-                    <el-text type="warning" size="small">
-                      <el-icon><Warning /></el-icon>
-                      新目标出现时将自动保存预警帧并记录，同时播放提示音
-                    </el-text>
-                  </div>
-                </el-form-item>
-                
-                <!-- 新增：预警提示音设置 -->
-                <el-form-item label="预警提示音" v-if="trackingSettings.enableAlert">
-                  <el-switch 
-                    v-model="alertSettings.enableSound" 
-                    @change="onAlertSettingsChange"
-                  />
-                  <div class="setting-desc">
-                    新目标出现时播放提示音
-                  </div>
-                  
-                  <div v-if="alertSettings.enableSound" class="alert-sound-settings">
-                    <el-form-item label="音量" label-width="60px" style="margin-top: 10px;">
-                      <el-slider 
-                        v-model="alertSettings.volume" 
-                        :min="0" 
-                        :max="100" 
-                        :step="5"
-                        show-input
-                        size="small"
-                        style="width: 150px;"
-                      />
-                    </el-form-item>
-                    <el-button size="small" @click="testAlertSound">
-                      <el-icon><Promotion /></el-icon>
-                      测试音效
+                  <span>RTSP流管理</span>
+                  <div class="rtsp-controls">
+                    <el-button 
+                      type="primary" 
+                      size="small"
+                      @click="showAddStreamDialog = true"
+                    >
+                      <el-icon><Plus /></el-icon>
+                      添加流
+                    </el-button>
+                    <el-button 
+                      type="success" 
+                      size="small"
+                      @click="startAllStreams"
+                    >
+                      <el-icon><VideoPlay /></el-icon>
+                      启动全部
+                    </el-button>
+                    <el-button 
+                      type="danger" 
+                      size="small"
+                      @click="stopAllStreams"
+                    >
+                      <el-icon><VideoPause /></el-icon>
+                      停止全部
                     </el-button>
                   </div>
-                </el-form-item>
-                
-                <el-form-item v-if="trackingSettings.enableCounting" label="说明">
-                  <div class="counting-info">
-                    <p><strong>累积计数:</strong> 从视频开始到结束，总共出现过的不同ID数量</p>
-                    <p><strong>当前屏幕:</strong> 当前时刻屏幕内可见的目标数量</p>
-                    <p><strong>自动统计:</strong> 系统将自动统计所有检测到的类别，并在检测结果中显示详细统计信息</p>
+                </div>
+              </template>
+              
+              <!-- 四宫格显示 -->
+              <div class="rtsp-grid">
+                <div 
+                  v-for="(position, index) in gridPositions" 
+                  :key="`grid-${position.x}-${position.y}`"
+                  class="rtsp-grid-item"
+                  :class="{ 'has-stream': getStreamByPosition(position.x, position.y) }"
+                >
+                  <div v-if="getStreamByPosition(position.x, position.y)" class="stream-container">
+                    <!-- 流视频显示 -->
+                    <div class="stream-video-container">
+                      <img 
+                        v-if="streamFrames[getStreamByPosition(position.x, position.y).id]"
+                        :src="streamFrames[getStreamByPosition(position.x, position.y).id]"
+                        class="stream-frame"
+                        :alt="`${getStreamByPosition(position.x, position.y).name} - 实时画面`"
+                      />
+                      <div v-else class="stream-placeholder">
+                        <el-icon class="stream-icon"><VideoPlay /></el-icon>
+                        <p>{{ getStreamByPosition(position.x, position.y).name }}</p>
+                        <p class="stream-status">等待连接...</p>
+                      </div>
+                    </div>
+                    
+                    <!-- 流信息和控制 -->
+                    <div class="stream-info">
+                      <div class="stream-header">
+                        <h4 class="stream-name">{{ getStreamByPosition(position.x, position.y).name }}</h4>
+                        <div class="stream-status-indicator">
+                          <el-tag 
+                            :type="getStreamStatus(getStreamByPosition(position.x, position.y).id) === 'running' ? 'success' : 'danger'"
+                            size="small"
+                          >
+                            {{ getStreamStatusText(getStreamByPosition(position.x, position.y).id) }}
+                          </el-tag>
+                        </div>
+                      </div>
+                      
+                      <div class="stream-controls">
+                        <el-button-group size="small">
+                          <el-button 
+                            :type="getStreamStatus(getStreamByPosition(position.x, position.y).id) === 'running' ? 'danger' : 'success'"
+                            @click="toggleStream(getStreamByPosition(position.x, position.y))"
+                          >
+                            <el-icon v-if="getStreamStatus(getStreamByPosition(position.x, position.y).id) === 'running'">
+                              <VideoPause />
+                            </el-icon>
+                            <el-icon v-else><VideoPlay /></el-icon>
+                          </el-button>
+                          <el-button @click="editStream(getStreamByPosition(position.x, position.y))">
+                            <el-icon><Setting /></el-icon>
+                          </el-button>
+                          <el-button type="danger" @click="deleteStream(getStreamByPosition(position.x, position.y))">
+                            <el-icon><Delete /></el-icon>
+                          </el-button>
+                        </el-button-group>
+                      </div>
+                    </div>
                   </div>
-                </el-form-item>
-              </el-form>
+                  
+                  <!-- 空位置 -->
+                  <div v-else class="empty-grid-item" @click="showAddStreamDialog = true">
+                    <el-icon class="add-stream-icon"><Plus /></el-icon>
+                    <p>点击添加RTSP流</p>
+                  </div>
+                </div>
+              </div>
             </el-card>
           </div>
           
           <!-- 检测控制 -->
-          <div class="detection-controls" v-if="detectionMode !== 'camera'">
+          <div class="detection-controls" v-if="detectionMode !== 'camera' && detectionMode !== 'rtsp'">
             <el-button 
               type="primary" 
               size="large"
@@ -336,108 +263,10 @@
           <template #header>
             <div class="card-header">
               <span>检测结果</span>
-              <div class="result-stats">
-                <el-tag v-if="detectionResult.detections" type="success">
-                  检测到 {{ detectionResult.detections.length }} 个目标
-                </el-tag>
-                <el-tag v-if="detectionResult.segmentation_results" type="warning">
-                  分割掩码: {{ detectionResult.segmentation_results.masks_count || 0 }}
-                </el-tag>
-                <el-tag v-if="detectionResult.model_type === 'segmentation'" type="info">
-                  {{ detectionResult.model_type === 'segmentation' ? '分割模式' : '检测模式' }}
-                </el-tag>
-                <el-tag v-if="detectionResult.tracking_results" type="primary">
-                  跟踪到 {{ detectionResult.tracking_results.length }} 个轨迹
-                </el-tag>
-                <el-tag v-if="detectionResult.counting_results || currentCounts" type="warning">
-                  累积计数: {{ getTotalCount() }}
-                </el-tag>
-                <el-tag v-if="detectionResult.counting_results || currentCounts" type="info">
-                  当前屏幕: {{ getCurrentScreenCount() }}
-                </el-tag>
-                <!-- 新增：预警统计标签 -->
-                <el-tag v-if="realtimeAlerts.length > 0" type="danger">
-                  预警: {{ realtimeAlerts.length }}
-                </el-tag>
-              </div>
             </div>
           </template>
           
           <div class="result-content">
-            <!-- 新增：实时预警显示区域 -->
-            <div v-if="detectionMode === 'camera' && trackingSettings.enableAlert && realtimeAlerts.length > 0" class="realtime-alerts">
-              <h4 class="alerts-title">
-                <el-icon class="alert-icon"><Warning /></el-icon>
-                实时预警 ({{ realtimeAlerts.length }})
-              </h4>
-              <div class="alerts-container">
-                <div 
-                  v-for="(alert, index) in realtimeAlerts.slice(0, 3)" 
-                  :key="`alert-${alert.id}-${index}`"
-                  class="alert-item"
-                  :class="{ 'alert-new': alert.isNew }"
-                >
-                  <div class="alert-image-container">
-                    <img 
-                      v-if="alert.frameImage" 
-                      :src="alert.frameImage" 
-                      class="alert-frame-image"
-                      @click="openAlertPreview(alert)"
-                      alt="预警帧"
-                    >
-                    <div class="alert-overlay">
-                      <el-button type="danger" size="small" @click="openAlertPreview(alert)">
-                        <el-icon><ZoomIn /></el-icon>
-                        查看详情
-                      </el-button>
-                    </div>
-                  </div>
-                  <div class="alert-info">
-                    <div class="alert-header">
-                      <el-tag type="danger" size="small">
-                        新目标 ID:{{ alert.targetId }}
-                      </el-tag>
-                      <span class="alert-time">{{ formatAlertTime(alert.timestamp) }}</span>
-                    </div>
-                    <div class="alert-details">
-                      <span class="alert-class">{{ alert.targetClass }}</span>
-                      <span class="alert-confidence">置信度: {{ (alert.confidence * 100).toFixed(1) }}%</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              
-              <!-- 显示更多预警的按钮 -->
-              <div v-if="realtimeAlerts.length > 3" class="more-alerts">
-                <el-button size="small" type="text" @click="showAllAlerts = !showAllAlerts">
-                  {{ showAllAlerts ? '收起' : `查看全部 ${realtimeAlerts.length} 条预警` }}
-                  <el-icon><ArrowUp v-if="showAllAlerts" /><ArrowDown v-else /></el-icon>
-                </el-button>
-              </div>
-              
-              <!-- 展开显示所有预警 -->
-              <div v-if="showAllAlerts && realtimeAlerts.length > 3" class="all-alerts">
-                <div 
-                  v-for="(alert, index) in realtimeAlerts.slice(3)" 
-                  :key="`all-alert-${alert.id}-${index}`"
-                  class="alert-item-compact"
-                >
-                  <img 
-                    v-if="alert.frameImage" 
-                    :src="alert.frameImage" 
-                    class="alert-frame-image-small"
-                    @click="openAlertPreview(alert)"
-                    alt="预警帧"
-                  >
-                  <div class="alert-info-compact">
-                    <el-tag type="danger" size="small">ID:{{ alert.targetId }}</el-tag>
-                    <span>{{ alert.targetClass }}</span>
-                    <span class="alert-time">{{ formatAlertTime(alert.timestamp) }}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-            
             <!-- 检测结果图片 -->
             <div v-if="detectionResult.result_image && (detectionMode === 'image' || detectionMode === 'image_seg')" class="result-media">
               <img 
@@ -445,14 +274,7 @@
                 class="result-image" 
                 :alt="detectionMode === 'image_seg' ? '分割结果' : '检测结果'" 
                 @error="handleImageError"
-                @click="openImagePreview(getResultImageUrl())"
-              >
-              <div class="image-overlay">
-                <el-button type="primary" @click="openImagePreview(getResultImageUrl())">
-                  <el-icon><ZoomIn /></el-icon>
-                  点击放大查看{{ detectionMode === 'image_seg' ? '分割结果' : '' }}
-                </el-button>
-              </div>
+              />
             </div>
             
             <!-- 检测结果视频 -->
@@ -463,23 +285,15 @@
                 controls 
                 preload="metadata"
                 @error="handleVideoError"
-                @loadstart="onVideoLoadStart"
-                @loadeddata="onVideoLoaded"
               >
                 您的浏览器不支持视频播放
               </video>
-              <div class="video-overlay">
-                <el-button type="primary" @click="openVideoPreview(getResultVideoUrl())">
-                  <el-icon><ZoomIn /></el-icon>
-                  全屏查看{{ detectionMode === 'video_seg' ? '分割结果' : '' }}
-                </el-button>
-              </div>
             </div>
             
             <!-- 检测结果列表 -->
             <div v-if="detectionResult.detections && detectionResult.detections.length > 0" class="detection-list">
               <h4>检测详情</h4>
-              <el-table :data="detectionResult.detections" style="width: 100%" size="small" max-height="300">
+              <el-table :data="detectionResult.detections" style="width: 100%" size="small">
                 <el-table-column prop="class" label="类别" width="120" />
                 <el-table-column label="置信度" width="100">
                   <template #default="scope">
@@ -496,257 +310,120 @@
                     </span>
                   </template>
                 </el-table-column>
-                <el-table-column label="帧数" v-if="detectionMode === 'video'" width="80">
-                  <template #default="scope">
-                    {{ scope.row.frame || '--' }}
-                  </template>
-                </el-table-column>
               </el-table>
             </div>
             
-            <!-- 类别计数统计 -->
-            <div v-if="trackingSettings.enableCounting && (classCountsData.length > 0 || (detectionMode === 'camera' && isCameraActive))" class="class-counts">
-              <h4>类别计数统计</h4>
-              <div v-if="classCountsData.length > 0">
-                <el-table 
-                  :data="paginatedClassCounts" 
-                  style="width: 100%" 
-                  size="small"
-                  :show-header="true"
-                >
-                  <el-table-column prop="class" label="类别" width="120">
-                    <template #default="scope">
-                      <el-tag :type="getClassTagType(scope.row.class)">
-                        {{ scope.row.class }}
-                      </el-tag>
-                    </template>
-                  </el-table-column>
-                  <el-table-column prop="currentScreen" label="当前屏幕" width="100" align="center">
-                    <template #default="scope">
-                      <span class="count-number">{{ scope.row.currentScreen }}</span>
-                    </template>
-                  </el-table-column>
-                  <el-table-column prop="cumulativeTotal" label="累积计数" width="100" align="center">
-                    <template #default="scope">
-                      <span class="count-number cumulative">{{ scope.row.cumulativeTotal }}</span>
-                    </template>
-                  </el-table-column>
-                  <el-table-column label="计数比例" align="center">
-                    <template #default="scope">
-                      <el-progress 
-                        :percentage="getCountPercentage(scope.row.cumulativeTotal)" 
-                        :stroke-width="6"
-                        :show-text="false"
-                        :color="getProgressColor(scope.row.cumulativeTotal)"
-                      />
-                      <span class="percentage-text">{{ getCountPercentage(scope.row.cumulativeTotal) }}%</span>
-                    </template>
-                  </el-table-column>
-                </el-table>
-                
-                <!-- 分页 -->
-                <div v-if="classCountsTotal > countsPagination.pageSize" class="counts-pagination">
-                  <el-pagination
-                    v-model:current-page="countsPagination.currentPage"
-                    :page-size="countsPagination.pageSize"
-                    :total="classCountsTotal"
-                    layout="prev, pager, next, jumper"
-                    @current-change="handleCountsPageChange"
-                    small
-                  />
-                </div>
-              </div>
-              <div v-else class="empty-counts">
-                <el-empty description="暂无计数数据" :image-size="60" />
-              </div>
-            </div>
-            
             <!-- 空状态 -->
-            <div v-if="!detectionResult.detections && !$store.state.isLoading && detectionMode !== 'camera'" class="empty-result">
+            <div v-if="!detectionResult.detections && !$store.state.isLoading && detectionMode !== 'camera' && detectionMode !== 'rtsp'" class="empty-result">
               <el-empty description="暂无检测结果">
                 <el-button type="primary" @click="startDetection" v-if="canDetect">
                   开始检测
                 </el-button>
               </el-empty>
             </div>
-            
-            <!-- 摄像头模式的空状态 -->
-            <div v-if="detectionMode === 'camera' && !isCameraActive && !$store.state.isLoading" class="empty-result">
-              <el-empty description="请启动摄像头开始实时检测" />
-            </div>
-            
-            <!-- 实时检测统计 -->
-            <div v-if="detectionMode === 'camera' && isCameraActive" class="realtime-stats">
-              <el-row :gutter="20">
-                <el-col :span="6">
-                  <el-statistic title="实时检测目标" :value="realtimeDetections.length" />
-                </el-col>
-                <el-col :span="6" v-if="trackingSettings.enableTracking">
-                  <el-statistic title="跟踪轨迹" :value="realtimeTrackingResults.length" />
-                </el-col>
-                <el-col :span="6" v-if="trackingSettings.enableCounting">
-                  <el-statistic title="累积计数" :value="getTotalCount()" />
-                </el-col>
-                <el-col :span="6" v-if="trackingSettings.enableCounting">
-                  <el-statistic title="当前屏幕" :value="getCurrentScreenCount()" />
-                </el-col>
-              </el-row>
-            </div>
-            
-            <!-- 加载状态 -->
-            <div v-if="$store.state.isLoading" class="loading-result">
-              <el-loading 
-                element-loading-text="正在进行AI检测分析..."
-                element-loading-spinner="el-icon-loading"
-                element-loading-background="rgba(0, 0, 0, 0.8)"
-              />
-            </div>
           </div>
         </el-card>
       </el-col>
     </el-row>
     
-    <!-- 预警帧详情对话框 -->
+    <!-- RTSP流配置对话框 -->
     <el-dialog
-      v-model="showAlertPreview"
-      title="预警详情"
-      width="70%"
-      top="5vh"
+      v-model="showAddStreamDialog"
+      :title="editingStream ? '编辑RTSP流' : '添加RTSP流'"
+      width="600px"
       destroy-on-close
-      @close="closeAlertPreview"
+      @close="resetStreamForm"
     >
-      <div v-if="selectedAlert" class="alert-preview-container">
-        <div class="alert-preview-header">
-          <div class="alert-preview-info">
-            <el-tag type="danger" size="large">
-              <el-icon><Warning /></el-icon>
-              新目标预警 ID:{{ selectedAlert.targetId }}
-            </el-tag>
-            <div class="alert-meta">
-              <span class="alert-class-large">{{ selectedAlert.targetClass }}</span>
-              <span class="alert-confidence-large">置信度: {{ (selectedAlert.confidence * 100).toFixed(1) }}%</span>
-              <span class="alert-time-large">{{ formatAlertTime(selectedAlert.timestamp, true) }}</span>
-            </div>
-          </div>
-        </div>
+      <el-form
+        ref="streamFormRef"
+        :model="streamForm"
+        :rules="streamFormRules"
+        label-width="100px"
+        size="default"
+      >
+        <el-form-item label="流名称" prop="name">
+          <el-input 
+            v-model="streamForm.name" 
+            placeholder="请输入流名称"
+            clearable
+          />
+        </el-form-item>
         
-        <div class="alert-preview-image">
-          <img 
-            :src="selectedAlert.frameImage" 
-            class="alert-frame-large"
-            alt="预警帧详情"
+        <el-form-item label="RTSP地址" prop="url">
+          <el-input 
+            v-model="streamForm.url" 
+            placeholder="rtsp://username:password@ip:port/path"
+            clearable
+          />
+          <div class="form-tip">
+            例如: rtsp://admin:123456@192.168.1.100:554/stream1
+          </div>
+        </el-form-item>
+        
+        <el-form-item label="用户名">
+          <el-input 
+            v-model="streamForm.username" 
+            placeholder="RTSP用户名（可选）"
+            clearable
+          />
+        </el-form-item>
+        
+        <el-form-item label="密码">
+          <el-input 
+            v-model="streamForm.password" 
+            type="password" 
+            placeholder="RTSP密码（可选）"
+            show-password
+            clearable
+          />
+        </el-form-item>
+        
+        <el-form-item label="检测模型">
+          <el-select 
+            v-model="streamForm.model_path" 
+            placeholder="选择检测模型"
+            style="width: 100%"
           >
-          <div class="alert-image-controls">
-            <el-button @click="downloadAlertFrame">
-              <el-icon><Download /></el-icon>
-              下载预警帧
-            </el-button>
-          </div>
-        </div>
+            <el-option
+              v-for="model in availableModels"
+              :key="model.path"
+              :label="model.name"
+              :value="model.path"
+            />
+          </el-select>
+        </el-form-item>
         
-        <div class="alert-preview-details">
-          <h4>目标信息</h4>
-          <el-descriptions :column="2" border>
-            <el-descriptions-item label="目标ID">{{ selectedAlert.targetId }}</el-descriptions-item>
-            <el-descriptions-item label="目标类别">{{ selectedAlert.targetClass }}</el-descriptions-item>
-            <el-descriptions-item label="检测置信度">{{ (selectedAlert.confidence * 100).toFixed(2) }}%</el-descriptions-item>
-            <el-descriptions-item label="预警时间">{{ formatAlertTime(selectedAlert.timestamp, true) }}</el-descriptions-item>
-            <el-descriptions-item label="边界框坐标" span="2">
-              {{ formatBbox(selectedAlert.bbox) }}
-            </el-descriptions-item>
-          </el-descriptions>
-        </div>
-      </div>
-    </el-dialog>
-    
-    <!-- 图片预览对话框 -->
-    <el-dialog
-      v-model="showImagePreview"
-      title="检测结果 - 放大查看"
-      width="90%"
-      top="5vh"
-      destroy-on-close
-      @close="closeImagePreview"
-    >
-      <div class="preview-container">
-        <img 
-          v-if="previewImageUrl" 
-          :src="previewImageUrl" 
-          class="preview-image" 
-          alt="检测结果放大图"
-          :style="{ 
-            transform: `scale(${zoomLevel})`,
-            cursor: 'grab'
-          }"
-          @load="onPreviewImageLoad"
-          @error="onPreviewImageError"
-          @mousedown="startDrag"
-          @mousemove="drag"
-          @mouseup="endDrag"
-          @wheel="handleWheel"
-        >
-        <div class="preview-controls">
-          <el-button-group>
-            <el-button @click="zoomIn">
-              <el-icon><ZoomIn /></el-icon>
-              放大
-            </el-button>
-            <el-button @click="zoomOut">
-              <el-icon><ZoomOut /></el-icon>
-              缩小
-            </el-button>
-            <el-button @click="resetZoom">
-              <el-icon><RefreshRight /></el-icon>
-              重置
-            </el-button>
-            <el-button @click="downloadImage">
-              <el-icon><Download /></el-icon>
-              下载
-            </el-button>
-          </el-button-group>
-          <div class="zoom-info">
-            缩放: {{ Math.round(zoomLevel * 100) }}%
+        <el-form-item label="功能设置">
+          <div class="feature-settings">
+            <el-checkbox v-model="streamForm.detection_enabled">启用检测</el-checkbox>
+            <el-checkbox v-model="streamForm.tracking_enabled">启用跟踪</el-checkbox>
+            <el-checkbox v-model="streamForm.counting_enabled">启用计数</el-checkbox>
+            <el-checkbox v-model="streamForm.alert_enabled">启用预警</el-checkbox>
           </div>
-        </div>
-      </div>
-    </el-dialog>
-    
-    <!-- 视频预览对话框 -->
-    <el-dialog
-      v-model="showVideoPreview"
-      title="检测结果 - 全屏查看"
-      width="90%"
-      top="5vh"
-      destroy-on-close
-      @close="closeVideoPreview"
-    >
-      <div class="preview-container">
-        <video 
-          v-if="previewVideoUrl" 
-          :src="previewVideoUrl" 
-          class="preview-video" 
-          controls 
-          autoplay
-        >
-          您的浏览器不支持视频播放
-        </video>
-        <div class="preview-controls">
-          <el-button @click="downloadVideo">
-            <el-icon><Download /></el-icon>
-            下载视频
+        </el-form-item>
+        
+        <el-form-item label="状态">
+          <el-switch 
+            v-model="streamForm.is_active"
+            active-text="启用"
+            inactive-text="禁用"
+          />
+        </el-form-item>
+      </el-form>
+      
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="showAddStreamDialog = false">取消</el-button>
+          <el-button 
+            type="primary" 
+            @click="saveStream"
+            :loading="streamSaving"
+          >
+            {{ editingStream ? '更新' : '添加' }}
           </el-button>
-        </div>
-      </div>
+        </span>
+      </template>
     </el-dialog>
-    
-    <!-- 隐藏的音频元素用于播放提示音 -->
-    <audio 
-      ref="alertAudio" 
-      preload="auto"
-      style="display: none;"
-    >
-      您的浏览器不支持音频播放
-    </audio>
   </div>
 </template>
 
@@ -759,13 +436,9 @@ import {
   Plus, 
   Search, 
   RefreshRight,
-  ZoomIn,
-  ZoomOut,
-  Download,
-  Warning,
-  Promotion,
-  ArrowUp,
-  ArrowDown
+  VideoPause,
+  Setting,
+  Delete
 } from '@element-plus/icons-vue'
 
 export default {
@@ -777,13 +450,9 @@ export default {
     Plus,
     Search,
     RefreshRight,
-    ZoomIn,
-    ZoomOut,
-    Download,
-    Warning,
-    Promotion,
-    ArrowUp,
-    ArrowDown
+    VideoPause,
+    Setting,
+    Delete
   },
   data() {
     return {
@@ -793,162 +462,160 @@ export default {
       videoFile: null,
       isCameraActive: false,
       detectionResult: {},
-      realtimeDetections: [],
-      realtimeTrackingResults: [],
-      currentCounts: {},
       cameraStream: null,
-      detectionInterval: null,
-      // 添加停止标志，确保异步操作不会在停止后继续
-      detectionStopped: false,
-      // 添加正在进行的请求数量计数
-      activeRequests: 0,
-      uploadAction: 'http://localhost:5000/api/detect_image',
-      videoUploadAction: 'http://localhost:5000/api/detect_video',
-      videoLoading: false,
-      showImagePreview: false,
-      showVideoPreview: false,
-      previewImageUrl: '',
-      previewVideoUrl: '',
-      zoomLevel: 1,
-      imageWidth: 0,
-      imageHeight: 0,
-      isDragging: false,
-      dragStartX: 0,
-      dragStartY: 0,
-      // 新增跟踪和计数相关数据
-      trackingSettings: {
-        enableTracking: false,
-        enableCounting: false,
-        enableAlert: false,
-        countingClass: ''
+      
+      // RTSP流相关数据
+      showAddStreamDialog: false,
+      editingStream: null,
+      streamSaving: false,
+      rtspStreams: [],
+      streamFrames: {},
+      streamStatus: {},
+      rtspUpdateInterval: null,
+      
+      // 四宫格位置
+      gridPositions: [
+        { x: 0, y: 0 },
+        { x: 1, y: 0 },
+        { x: 0, y: 1 },
+        { x: 1, y: 1 }
+      ],
+      
+      // 流配置表单
+      streamForm: {
+        name: '',
+        url: '',
+        username: '',
+        password: '',
+        model_path: 'yolov8n.pt',
+        detection_enabled: true,
+        tracking_enabled: false,
+        counting_enabled: false,
+        alert_enabled: false,
+        is_active: true
       },
-      // 新增分割设置
-      segmentationSettings: {
-        showMasks: true,
-        showBoxes: true,
-        showLabels: true,
-        maskAlpha: 0.4,
-        confThreshold: 0.25,
-        iouThreshold: 0.45
+      
+      // 表单验证规则
+      streamFormRules: {
+        name: [
+          { required: true, message: '请输入流名称', trigger: 'blur' },
+          { min: 1, max: 50, message: '流名称长度在1到50个字符', trigger: 'blur' }
+        ],
+        url: [
+          { required: true, message: '请输入RTSP地址', trigger: 'blur' },
+          { pattern: /^rtsp:\/\//, message: 'RTSP地址必须以rtsp://开头', trigger: 'blur' }
+        ]
       },
-      availableClasses: [],
-      // 新增类别计数显示相关数据
-      classCounts: {
-        currentScreen: {},
-        cumulativeTotal: {},
-        totalScreenCount: 0,
-        totalCumulativeCount: 0
-      },
-      // 类别计数分页数据
-      countsPagination: {
-        currentPage: 1,
-        pageSize: 10,
-        total: 0
-      },
-      // 新增预警相关数据
-      realtimeAlerts: [],
-      showAlertPreview: false,
-      selectedAlert: null,
-      showAllAlerts: false,
-      alertSettings: {
-        enableSound: true,
-        volume: 50
-      }
+      
+      // 可用模型列表 - 从API动态加载
+      availableModels: []
     }
   },
+  
   computed: {
     canDetect() {
       return (this.detectionMode === 'image' && this.imageUrl) || 
              (this.detectionMode === 'image_seg' && this.imageUrl) ||
              (this.detectionMode === 'video' && this.videoFile) ||
              (this.detectionMode === 'video_seg' && this.videoFile)
-    },
-    
-    isSegmentationMode() {
-      return this.detectionMode === 'image_seg' || this.detectionMode === 'video_seg'
-    },
-    
-    // 获取类别计数数据
-    classCountsData() {
-      let currentScreen = {}
-      let cumulativeTotal = {}
-      
-      if (this.detectionMode === 'camera' && this.currentCounts) {
-        // 摄像头模式：从currentCounts获取数据
-        currentScreen = this.currentCounts
-        cumulativeTotal = this.currentCounts // 实时模式下累积计数等于当前计数
-      } else if (this.detectionResult.count_summary) {
-        // 视频模式：从count_summary获取数据
-        currentScreen = this.detectionResult.count_summary.current_screen || {}
-        cumulativeTotal = this.detectionResult.count_summary.cumulative_total || {}
-      }
-      
-      // 合并所有类别，创建完整的计数数据
-      const allClasses = new Set([...Object.keys(currentScreen), ...Object.keys(cumulativeTotal)])
-      const classCountsArray = Array.from(allClasses).map(className => ({
-        class: className,
-        currentScreen: currentScreen[className] || 0,
-        cumulativeTotal: cumulativeTotal[className] || 0
-      }))
-      
-      // 按累积计数排序
-      classCountsArray.sort((a, b) => b.cumulativeTotal - a.cumulativeTotal)
-      
-      return classCountsArray
-    },
-    
-    // 获取分页后的类别计数数据
-    paginatedClassCounts() {
-      const start = (this.countsPagination.currentPage - 1) * this.countsPagination.pageSize
-      const end = start + this.countsPagination.pageSize
-      return this.classCountsData.slice(start, end)
-    },
-    
-    // 获取类别计数总数
-    classCountsTotal() {
-      return this.classCountsData.length
-    }
-  },
-  
-  watch: {
-    // 监听类别计数数据变化
-    classCountsData() {
-      this.updateClassCounts()
-    },
-    
-    // 监听实时计数数据变化
-    currentCounts() {
-      this.updateClassCounts()
-    },
-    
-    // 监听检测结果变化
-    detectionResult() {
-      this.updateClassCounts()
-    },
-
-    // 监听预警数据变化
-    realtimeAlerts() {
-      this.updateClassCounts() // 预警也会影响计数统计
     }
   },
   
   async mounted() {
-    // 加载可用类别
-    await this.loadAvailableClasses()
+    // 加载可用模型列表
+    await this.loadAvailableModels()
     
-    // 初始化预警音效
-    this.initAlertSound()
+    // 如果是RTSP模式，初始化RTSP流
+    if (this.detectionMode === 'rtsp') {
+      await this.initRTSPStreams()
+    }
+    
+    // 添加resize事件监听器，使用防抖处理
+    this.debouncedHandleResize = this.debounce(this.handleResize, 150)
+    window.addEventListener('resize', this.debouncedHandleResize)
   },
+  
   methods: {
+    // 防抖函数
+    debounce(func, wait) {
+      let timeout
+      return function executedFunction(...args) {
+        const later = () => {
+          clearTimeout(timeout)
+          func(...args)
+        }
+        clearTimeout(timeout)
+        timeout = setTimeout(later, wait)
+      }
+    },
+    
+    // 处理窗口大小变化
+    handleResize() {
+      // 强制重新渲染某些组件以避免ResizeObserver问题
+      if (this.detectionMode === 'rtsp') {
+        this.$nextTick(() => {
+          // 触发RTSP网格重新计算
+          const gridElement = this.$el.querySelector('.rtsp-grid')
+          if (gridElement) {
+            gridElement.style.display = 'none'
+            gridElement.offsetHeight // 强制重排
+            gridElement.style.display = 'grid'
+          }
+        })
+      }
+    },
+    
     getModeTitle() {
       const titles = {
         image: '图片上传检测',
         image_seg: '图片分割检测',
         video: '视频上传检测',
         video_seg: '视频分割检测',
-        camera: '摄像头实时检测'
+        camera: '摄像头实时检测',
+        rtsp: 'RTSP流实时检测'
       }
       return titles[this.detectionMode]
+    },
+    
+    handleModeChange() {
+      // 停止摄像头和RTSP更新
+      this.silentStopCamera()
+      this.stopRTSPUpdate()
+      this.resetUpload()
+      this.detectionResult = {}
+      
+      // 如果切换到RTSP模式，初始化RTSP流并重新加载模型列表
+      if (this.detectionMode === 'rtsp') {
+        this.$nextTick(async () => {
+          // 重新加载模型列表，确保获取最新的可用模型
+          await this.loadAvailableModels()
+          await this.initRTSPStreams()
+        })
+      }
+    },
+    
+    // 加载可用模型列表
+    async loadAvailableModels() {
+      try {
+        const response = await fetch('http://localhost:5000/api/models')
+        const data = await response.json()
+        if (data.success) {
+          // 将模型数据转换为下拉选择需要的格式
+          this.availableModels = data.models.map(model => ({
+            name: model.name + (model.pretrained ? ' (预训练)' : ''),
+            path: model.path,
+            type: model.type || 'detection',
+            pretrained: model.pretrained || false
+          }))
+          console.log('✅ 加载可用模型列表成功:', this.availableModels.length, '个模型')
+        } else {
+          console.error('❌ 加载模型列表失败:', data.message)
+          ElMessage.error('加载模型列表失败: ' + data.message)
+        }
+      } catch (error) {
+        console.error('❌ 加载模型列表异常:', error)
+        ElMessage.error('加载模型列表失败: ' + error.message)
+      }
     },
     
     getUploadAction() {
@@ -959,260 +626,14 @@ export default {
       } else if (this.detectionMode === 'image') {
         return 'http://localhost:5000/api/detect_image'
       } else {
-        return this.videoUploadAction
+        return 'http://localhost:5000/api/detect_video'
       }
     },
     
-    getUploadData() {
-      const baseData = {
-        user_id: this.$store.getters.currentUser?.id || 1
-      }
-      
-      if (this.isSegmentationMode) {
-        return {
-          ...baseData,
-          show_masks: this.segmentationSettings.showMasks,
-          show_boxes: this.segmentationSettings.showBoxes,
-          show_labels: this.segmentationSettings.showLabels,
-          mask_alpha: this.segmentationSettings.maskAlpha,
-          conf_threshold: this.segmentationSettings.confThreshold,
-          iou_threshold: this.segmentationSettings.iouThreshold
-        }
-      } else {
-        return {
-          ...baseData,
-          enable_tracking: this.trackingSettings.enableTracking,
-          enable_counting: this.trackingSettings.enableCounting,
-          enable_alert: this.trackingSettings.enableAlert,
-          counting_class: this.trackingSettings.countingClass
-        }
-      }
-    },
-    
-    // 获取总计数
-    getTotalCount() {
-      // 对于实时摄像头模式，优先显示累积计数
-      if (this.detectionMode === 'camera' && this.currentCounts && Object.keys(this.currentCounts).length > 0) {
-        return Object.values(this.currentCounts).reduce((sum, count) => sum + count, 0)
-      }
-      
-      // 对于视频模式，优先显示累积计数
-      if (this.detectionResult.count_summary) {
-        const cumulativeTotal = this.detectionResult.count_summary.cumulative_total || {}
-        return Object.values(cumulativeTotal).reduce((sum, count) => sum + count, 0)
-      }
-      
-      // 备用：使用API返回的total_count
-      if (this.detectionResult.total_count !== undefined) {
-        return this.detectionResult.total_count
-      }
-      
-      // 最后备用逻辑
-      if (this.currentCounts && Object.keys(this.currentCounts).length > 0) {
-        return Object.values(this.currentCounts).reduce((sum, count) => sum + count, 0)
-      }
-      
-      return 0
-    },
-    
-    // 获取当前屏幕内计数
-    getCurrentScreenCount() {
-      // 对于实时摄像头模式
-      if (this.detectionMode === 'camera' && this.currentCounts && Object.keys(this.currentCounts).length > 0) {
-        return Object.values(this.currentCounts).reduce((sum, count) => sum + count, 0)
-      }
-      
-      // 对于视频模式，使用current_screen_count
-      if (this.detectionResult.current_screen_count !== undefined) {
-        return this.detectionResult.current_screen_count
-      }
-      
-      // 备用：使用count_summary中的current_screen
-      if (this.detectionResult.count_summary && this.detectionResult.count_summary.current_screen) {
-        const currentScreen = this.detectionResult.count_summary.current_screen
-        return Object.values(currentScreen).reduce((sum, count) => sum + count, 0)
-      }
-      
-      return 0
-    },
-    
-    // 加载可用类别
-    async loadAvailableClasses() {
-      try {
-        const response = await fetch('http://localhost:5000/api/model/classes')
-        const data = await response.json()
-        if (data.success) {
-          this.availableClasses = data.classes
-        }
-      } catch (error) {
-        console.error('加载类别失败:', error)
-      }
-    },
-
-    // 初始化预警音效
-    initAlertSound() {
-      try {
-        // 使用Web Audio API生成预警音效
-        const audioContext = new (window.AudioContext || window.webkitAudioContext)()
-        const duration = 0.5 // 0.5秒
-        const sampleRate = audioContext.sampleRate
-        const frameCount = duration * sampleRate
-        
-        const audioBuffer = audioContext.createBuffer(1, frameCount, sampleRate)
-        const channelData = audioBuffer.getChannelData(0)
-        
-        // 生成警报音（双音调）
-        for (let i = 0; i < frameCount; i++) {
-          const t = i / sampleRate
-          let frequency = 800 // 基础频率
-          
-          // 在0.25秒时切换到1000Hz，创建警报效果
-          if (t > 0.25) {
-            frequency = 1000
-          }
-          
-          // 生成音调，带有淡入淡出效果
-          const amplitude = Math.sin(Math.PI * t / duration) * 0.3 // 淡入淡出包络
-          channelData[i] = Math.sin(2 * Math.PI * frequency * t) * amplitude
-        }
-        
-        // 将AudioBuffer转换为Blob URL
-        const wavArrayBuffer = this.audioBufferToWav(audioBuffer)
-        const blob = new Blob([wavArrayBuffer], { type: 'audio/wav' })
-        const audioUrl = URL.createObjectURL(blob)
-        
-        // 设置音频源
-        if (this.$refs.alertAudio) {
-          this.$refs.alertAudio.src = audioUrl
-        }
-        
-        console.log('✅ 预警音效初始化成功')
-      } catch (error) {
-        console.error('❌ 预警音效初始化失败:', error)
-        // 如果生成失败，使用简单的音频数据URI作为后备
-        this.setFallbackAlertSound()
-      }
-    },
-
-    // 设置后备预警音效
-    setFallbackAlertSound() {
-      // 使用简单的音频数据URI作为后备方案
-      const audioDataUri = 'data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmEcBJ2bv/HAciUFJHfH8N2QQAoSXbPj66lWFAlFnt/yvmEcBJ2bv/HAciUFJHfH8N2QQAoTXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/HAciUFJHfH8N2QQAoUXbPj66lWFAlFnt/yv2EcBJ2bv/'
-      
-      if (this.$refs.alertAudio) {
-        this.$refs.alertAudio.src = audioDataUri
-      }
-    },
-
-    // 将AudioBuffer转换为WAV格式
-    audioBufferToWav(buffer) {
-      const length = buffer.length
-      const numberOfChannels = buffer.numberOfChannels
-      const sampleRate = buffer.sampleRate
-      const arrayBuffer = new ArrayBuffer(44 + length * 2)
-      const view = new DataView(arrayBuffer)
-      
-      // WAV文件头
-      let offset = 0
-      const writeString = (str) => {
-        for (let i = 0; i < str.length; i++) {
-          view.setUint8(offset + i, str.charCodeAt(i))
-        }
-        offset += str.length
-      }
-      
-      const writeUint32 = (value) => {
-        view.setUint32(offset, value, true)
-        offset += 4
-      }
-      
-      const writeUint16 = (value) => {
-        view.setUint16(offset, value, true)
-        offset += 2
-      }
-      
-      writeString('RIFF')
-      writeUint32(36 + length * 2)
-      writeString('WAVE')
-      writeString('fmt ')
-      writeUint32(16)
-      writeUint16(1)
-      writeUint16(numberOfChannels)
-      writeUint32(sampleRate)
-      writeUint32(sampleRate * 2)
-      writeUint16(2)
-      writeUint16(16)
-      writeString('data')
-      writeUint32(length * 2)
-      
-      // 写入音频数据
-      const channelData = buffer.getChannelData(0)
-      for (let i = 0; i < length; i++) {
-        const sample = Math.max(-1, Math.min(1, channelData[i]))
-        view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true)
-        offset += 2
-      }
-      
-      return arrayBuffer
-    },
-    
-    // 跟踪设置变化处理
-    async onTrackingSettingsChange() {
-      // 如果启用了跟踪，重置跟踪器确保ID从1开始
-      if (this.trackingSettings.enableTracking) {
-        try {
-          const resetResult = await this.$store.dispatch('resetTracker')
-          if (resetResult.success) {
-            console.log('跟踪器已重置')
-          } else {
-            console.error('重置跟踪器失败:', resetResult.message)
-          }
-        } catch (error) {
-          console.error('重置跟踪器异常:', error)
-        }
-      }
-      
-      // 如果是摄像头模式，需要重新启动检测
-      if (this.detectionMode === 'camera' && this.isCameraActive) {
-        this.startRealtimeDetection()
-      }
-    },
-    
-    // 重置跟踪器
-    async resetTracking() {
-      try {
-        const resetResult = await this.$store.dispatch('resetTracker')
-        if (resetResult.success) {
-          ElMessage.success('跟踪器已重置')
-          this.realtimeTrackingResults = [] // 清空当前显示的跟踪框
-          this.currentCounts = {} // 清空计数
-        } else {
-          ElMessage.error(resetResult.message || '重置跟踪器失败')
-        }
-      } catch (error) {
-        console.error('重置跟踪器异常:', error)
-        ElMessage.error('重置跟踪器失败: ' + error.message)
-      }
-    },
-
-    
-    // 获取上传数据
     getUploadData() {
       return {
-        user_id: this.$store.getters.currentUser?.id || 1,
-        enable_tracking: this.trackingSettings.enableTracking,
-        enable_counting: this.trackingSettings.enableCounting,
-        enable_alert: this.trackingSettings.enableAlert,
-        counting_class: this.trackingSettings.countingClass,
-        counting_line: this.trackingSettings.countingLine
+        user_id: this.$store.getters.currentUser?.id || 1
       }
-    },
-    
-    handleModeChange() {
-      // 静默关闭摄像头，不显示提示
-      this.silentStopCamera()
-      this.resetUpload()
-      this.detectionResult = {}
     },
     
     // 图片上传相关
@@ -1229,14 +650,12 @@ export default {
         return false
       }
       
-      // 保存图片URL用于预览
       this.imageUrl = URL.createObjectURL(file)
       return true
     },
     
     handleImageSuccess(response) {
       if (response.success) {
-        // 确保结果稳定显示
         this.detectionResult = { ...response }
         ElMessage.success('图片检测完成')
       } else {
@@ -1262,142 +681,26 @@ export default {
     },
     
     handleVideoChange(uploadFile) {
-      // 只保存视频文件用于预览，不立即检测
       this.videoUrl = URL.createObjectURL(uploadFile.raw)
       this.videoFile = uploadFile.raw
       ElMessage.success('视频上传成功，请点击"开始检测"进行分析')
     },
     
-    handleVideoSuccess(response) {
-      if (response.success) {
-        // 确保结果稳定显示
-        this.detectionResult = { ...response }
-        
-        let message = ''
-        if (response.model_type === 'segmentation') {
-          // 分割模式的消息
-          const stats = response.segmentation_stats || {}
-          message = `视频分割完成！处理了 ${stats.total_frames || 0} 帧，`
-          message += `检测到 ${stats.total_detections || 0} 个目标，`
-          message += `生成了 ${stats.total_masks || 0} 个分割掩码`
-        } else {
-          // 普通检测模式的消息
-          message = `视频检测完成！处理了 ${response.processed_frames || 0} 帧，检测到 ${response.total_detections || 0} 个目标`
-          
-          if (response.tracking_results) {
-            message += `，跟踪到 ${response.tracking_count || 0} 个轨迹`
-          }
-          
-          if (response.counting_results) {
-            message += `，计数结果: ${response.total_count || 0}`
-          }
-        }
-        
-        ElMessage.success(message)
-      } else {
-        ElMessage.error(response.message)
-      }
-    },
-    
-    handleUploadError(error, file, fileList) {
+    handleUploadError(error) {
       console.error('上传错误详情:', error)
-      if (error.response) {
-        const errorData = error.response.data
-        if (errorData && errorData.message) {
-          ElMessage.error(`上传失败: ${errorData.message}`)
-        } else {
-          ElMessage.error(`上传失败: HTTP ${error.response.status}`)
-        }
-      } else {
-        ElMessage.error('上传失败: ' + error.message)
-      }
-    },
-    
-    // 视频加载事件
-    onVideoLoadStart() {
-      this.videoLoading = true
-      console.log('视频开始加载...')
-    },
-    
-    onVideoLoaded() {
-      this.videoLoading = false
-      console.log('视频加载完成')
-    },
-    
-    handleImageError(event) {
-      console.error('图片加载错误:', event)
-      ElMessage.error('图片加载失败，请检查网络连接')
-    },
-    
-    handleVideoError(event) {
-      console.error('视频加载错误:', event)
-      const video = event.target
-      let errorMessage = '视频加载失败'
-      
-      if (video.error) {
-        switch (video.error.code) {
-          case 1: // MEDIA_ERR_ABORTED
-            errorMessage = '视频加载被中止'
-            break
-          case 2: // MEDIA_ERR_NETWORK
-            errorMessage = '视频网络加载错误'
-            break
-          case 3: // MEDIA_ERR_DECODE
-            errorMessage = '视频解码错误，格式可能不支持'
-            break
-          case 4: // MEDIA_ERR_SRC_NOT_SUPPORTED
-            errorMessage = '视频格式不支持或文件损坏'
-            break
-          default:
-            errorMessage = '视频播放出现未知错误'
-        }
-      }
-      
-      ElMessage.error(errorMessage)
-      
-      // 提供解决建议
-      this.$notify({
-        title: '视频加载失败',
-        message: '建议：1. 检查网络连接 2. 尝试其他视频格式 3. 重新上传视频',
-        type: 'warning',
-        duration: 8000
-      })
+      ElMessage.error('上传失败: ' + (error.message || '未知错误'))
     },
     
     // 摄像头相关
     async startCamera() {
       try {
-        // 重置停止标志
-        this.detectionStopped = false
-        this.activeRequests = 0
-        
-        // 在启动摄像头前先重置跟踪器，确保ID从1开始
-        if (this.trackingSettings.enableTracking) {
-          const resetResult = await this.$store.dispatch('resetTracker')
-          if (resetResult.success) {
-            console.log('跟踪器已重置')
-          } else {
-            console.error('重置跟踪器失败:', resetResult.message)
-          }
-        }
-        
         this.cameraStream = await navigator.mediaDevices.getUserMedia({ 
-          video: { 
-            width: { ideal: 640 },
-            height: { ideal: 480 },
-            facingMode: 'user'
-          } 
+          video: { width: { ideal: 640 }, height: { ideal: 480 } } 
         })
         
         if (this.$refs.cameraVideo) {
           this.$refs.cameraVideo.srcObject = this.cameraStream
           this.isCameraActive = true
-          
-          // 等待视频加载后开始检测
-          this.$refs.cameraVideo.onloadedmetadata = () => {
-            this.startRealtimeDetection()
-          }
-          
           ElMessage.success('摄像头已启动')
         }
       } catch (error) {
@@ -1411,137 +714,11 @@ export default {
     },
     
     silentStopCamera() {
-      // 设置停止标志，防止异步操作继续
-      this.detectionStopped = true
-      
       if (this.cameraStream) {
         this.cameraStream.getTracks().forEach(track => track.stop())
         this.cameraStream = null
       }
-      if (this.detectionInterval) {
-        clearInterval(this.detectionInterval)
-        this.detectionInterval = null
-      }
-      
-      // 等待所有异步请求完成后再清理UI
-      const cleanup = () => {
       this.isCameraActive = false
-      this.realtimeDetections = []
-      this.realtimeTrackingResults = []
-      this.currentCounts = {}
-      this.realtimeAlerts = [] // 清空预警
-      this.showAllAlerts = false // 收起所有预警
-      this.selectedAlert = null // 关闭预警详情
-      this.showAlertPreview = false // 关闭预警详情对话框
-        this.activeRequests = 0
-      }
-      
-      // 如果有正在进行的请求，等待完成
-      if (this.activeRequests > 0) {
-        setTimeout(() => {
-          cleanup()
-        }, 200) // 等待200ms让异步请求完成
-      } else {
-        cleanup()
-      }
-    },
-    
-    startRealtimeDetection() {
-      if (this.detectionInterval) {
-        clearInterval(this.detectionInterval)
-      }
-      
-      // 重置停止标志
-      this.detectionStopped = false
-      
-      // 在开始检测时清空计数和跟踪结果
-      this.currentCounts = {}
-      this.realtimeTrackingResults = []
-      this.realtimeDetections = []
-      this.realtimeAlerts = [] // 清空实时预警
-      this.showAllAlerts = false // 收起所有预警
-      this.selectedAlert = null // 关闭预警详情
-      this.showAlertPreview = false // 关闭预警详情对话框
-      
-      this.detectionInterval = setInterval(async () => {
-        // 双重检查：检查摄像头状态和停止标志
-        if (!this.isCameraActive || this.detectionStopped) {
-          return
-        }
-        
-        if (this.$refs.cameraVideo && this.$refs.cameraVideo.readyState === 4) {
-          const canvas = this.$refs.cameraCanvas
-          const video = this.$refs.cameraVideo
-          const ctx = canvas.getContext('2d')
-          
-          canvas.width = video.videoWidth
-          canvas.height = video.videoHeight
-          
-          if (canvas.width > 0 && canvas.height > 0) {
-            ctx.drawImage(video, 0, 0)
-            const imageData = canvas.toDataURL('image/jpeg', 0.8)
-            
-            try {
-              // 再次检查停止标志，防止在停止后发起新请求
-              if (this.detectionStopped) {
-                return
-              }
-              
-              // 增加活跃请求计数
-              this.activeRequests++
-              
-              const frameData = {
-                image: imageData,
-                user_id: this.$store.getters.currentUser?.id || 1,
-                enable_tracking: this.trackingSettings.enableTracking,
-                enable_counting: this.trackingSettings.enableCounting,
-                enable_alert: this.trackingSettings.enableAlert,
-                counting_class: '' // 统计所有类别
-              }
-              
-              const result = await this.$store.dispatch('processFrame', frameData)
-              
-              // 减少活跃请求计数
-              this.activeRequests = Math.max(0, this.activeRequests - 1)
-              
-              // 请求完成后再次检查停止标志，防止在停止后更新UI
-              if (this.detectionStopped || !this.isCameraActive) {
-                return
-              }
-              
-              if (result.success) {
-                // 使用Vue的响应式更新，避免闪烁
-                this.$nextTick(() => {
-                  // 最后一次检查，确保不在停止状态下更新UI
-                  if (!this.detectionStopped && this.isCameraActive) {
-                    this.realtimeDetections = result.detections && result.detections.length > 0 ? [...result.detections] : []
-                    this.realtimeTrackingResults = result.tracking_results && result.tracking_results.length > 0 ? [...result.tracking_results] : []
-                    this.currentCounts = result.counting_results ? { ...result.counting_results } : {}
-                    
-                    // 处理预警
-                    if (result.new_targets && result.new_targets.length > 0) {
-                      this.handleNewTargetAlerts(result.new_targets)
-                    }
-                  }
-                })
-              } else {
-                // 如果检测失败，也要检查停止标志
-                this.$nextTick(() => {
-                  if (!this.detectionStopped && this.isCameraActive) {
-                    this.realtimeDetections = []
-                    this.realtimeTrackingResults = []
-                    this.currentCounts = {}
-                  }
-                })
-              }
-            } catch (error) {
-              // 减少活跃请求计数
-              this.activeRequests = Math.max(0, this.activeRequests - 1)
-              console.error('实时检测失败:', error)
-            }
-          }
-        }
-      }, 100) // 全帧检测模式，提高前端调用频率到100ms
     },
     
     // 检测相关
@@ -1564,29 +741,9 @@ export default {
         
         const formData = new FormData()
         formData.append('file', this.videoFile)
+        formData.append('user_id', this.$store.getters.currentUser?.id || 1)
         
-        // 根据模式添加不同的参数
-        if (this.detectionMode === 'video_seg') {
-          formData.append('user_id', this.$store.getters.currentUser?.id || 1)
-          formData.append('show_masks', this.segmentationSettings.showMasks)
-          formData.append('show_boxes', this.segmentationSettings.showBoxes)
-          formData.append('show_labels', this.segmentationSettings.showLabels)
-          formData.append('mask_alpha', this.segmentationSettings.maskAlpha)
-          formData.append('conf_threshold', this.segmentationSettings.confThreshold)
-          formData.append('iou_threshold', this.segmentationSettings.iouThreshold)
-        } else {
-          formData.append('user_id', this.$store.getters.currentUser?.id || 1)
-          formData.append('enable_tracking', this.trackingSettings.enableTracking)
-          formData.append('enable_counting', this.trackingSettings.enableCounting)
-          formData.append('enable_alert', this.trackingSettings.enableAlert)
-          formData.append('counting_class', '') // 统计所有类别
-        }
-        
-        const uploadUrl = this.detectionMode === 'video_seg' ? 
-                         'http://localhost:5000/api/segment_video' : 
-                         this.videoUploadAction
-        
-        const response = await fetch(uploadUrl, {
+        const response = await fetch(this.getUploadAction(), {
           method: 'POST',
           body: formData
         })
@@ -1594,7 +751,8 @@ export default {
         const data = await response.json()
         
         if (data.success) {
-          this.handleVideoSuccess(data)
+          this.detectionResult = { ...data }
+          ElMessage.success('视频检测完成')
         } else {
           ElMessage.error(data.message || '视频处理失败')
         }
@@ -1607,7 +765,6 @@ export default {
     },
     
     resetUpload() {
-      // 清理旧的URL
       if (this.imageUrl && this.imageUrl.startsWith('blob:')) {
         URL.revokeObjectURL(this.imageUrl)
       }
@@ -1619,12 +776,6 @@ export default {
       this.videoUrl = ''
       this.videoFile = null
       this.detectionResult = {}
-      this.currentCounts = {}
-    },
-    
-    resetAll() {
-      this.resetUpload()
-      this.silentStopCamera()
     },
     
     // 结果显示相关
@@ -1641,401 +792,327 @@ export default {
       return `(${Math.round(bbox[0])}, ${Math.round(bbox[1])}) - (${Math.round(bbox[2])}, ${Math.round(bbox[3])})`
     },
     
-    getDetectionBoxStyle(detection) {
-      if (!detection.bbox || !this.$refs.cameraVideo) return { display: 'none' }
-      
-      const video = this.$refs.cameraVideo
-      const container = video.parentElement
-      
-      // 确保视频已经加载
-      if (!video.videoWidth || !video.videoHeight) return { display: 'none' }
-      
-      const videoRect = video.getBoundingClientRect()
-      const containerRect = container.getBoundingClientRect()
-      
-      const [x1, y1, x2, y2] = detection.bbox
-      
-      // 计算缩放比例
-      const scaleX = videoRect.width / video.videoWidth
-      const scaleY = videoRect.height / video.videoHeight
-      
-      // 计算相对于容器的位置
-      const left = (videoRect.left - containerRect.left) + (x1 * scaleX)
-      const top = (videoRect.top - containerRect.top) + (y1 * scaleY)
-      const width = (x2 - x1) * scaleX
-      const height = (y2 - y1) * scaleY
-      
-      // 确保框在有效范围内
-      if (left < 0 || top < 0 || width <= 0 || height <= 0) {
-        return { display: 'none' }
-      }
-      
-      return {
-        position: 'absolute',
-        left: `${left}px`,
-        top: `${top}px`,
-        width: `${width}px`,
-        height: `${height}px`,
-        border: '2px solid #00ff00',
-        backgroundColor: 'rgba(0, 255, 0, 0.1)',
-        pointerEvents: 'none',
-        zIndex: 10,
-        transition: 'all 0.1s ease-out'
-      }
-    },
-    
-    getTrackingBoxStyle(track) {
-      if (!track.bbox || !this.$refs.cameraVideo) return { display: 'none' }
-      
-      const video = this.$refs.cameraVideo
-      const container = video.parentElement
-      
-      // 确保视频已经加载
-      if (!video.videoWidth || !video.videoHeight) return { display: 'none' }
-      
-      const videoRect = video.getBoundingClientRect()
-      const containerRect = container.getBoundingClientRect()
-      
-      const [x1, y1, x2, y2] = track.bbox
-      
-      // 计算缩放比例
-      const scaleX = videoRect.width / video.videoWidth
-      const scaleY = videoRect.height / video.videoHeight
-      
-      // 计算相对于容器的位置
-      const left = (videoRect.left - containerRect.left) + (x1 * scaleX)
-      const top = (videoRect.top - containerRect.top) + (y1 * scaleY)
-      const width = (x2 - x1) * scaleX
-      const height = (y2 - y1) * scaleY
-      
-      // 确保框在有效范围内
-      if (left < 0 || top < 0 || width <= 0 || height <= 0) {
-        return { display: 'none' }
-      }
-      
-      return {
-        position: 'absolute',
-        left: `${left}px`,
-        top: `${top}px`,
-        width: `${width}px`,
-        height: `${height}px`,
-        border: '2px solid #0066ff',
-        backgroundColor: 'rgba(0, 102, 255, 0.1)',
-        pointerEvents: 'none',
-        zIndex: 11,
-        transition: 'all 0.1s ease-out'
-      }
-    },
-    
-    openImagePreview(imageUrl) {
-      this.previewImageUrl = imageUrl
-      this.showImagePreview = true
-    },
-    
-    openVideoPreview(videoUrl) {
-      this.previewVideoUrl = videoUrl
-      this.showVideoPreview = true
-    },
-    
-    closeImagePreview() {
-      this.showImagePreview = false
-      this.previewImageUrl = ''
-    },
-    
-    closeVideoPreview() {
-      this.showVideoPreview = false
-      this.previewVideoUrl = ''
-    },
-    
-    onPreviewImageLoad() {
-      const image = new Image()
-      image.src = this.previewImageUrl
-      image.onload = () => {
-        this.imageWidth = image.width
-        this.imageHeight = image.height
-      }
-    },
-    
-    onPreviewImageError(event) {
+    handleImageError(event) {
       console.error('图片加载错误:', event)
       ElMessage.error('图片加载失败，请检查网络连接')
     },
     
-    zoomIn() {
-      this.zoomLevel += 0.1
-      if (this.zoomLevel > 3) this.zoomLevel = 3
+    handleVideoError(event) {
+      console.error('视频加载错误:', event)
+      ElMessage.error('视频加载失败，请检查网络连接')
     },
     
-    zoomOut() {
-      this.zoomLevel -= 0.1
-      if (this.zoomLevel < 0.1) this.zoomLevel = 0.1
-    },
+    // ==================== RTSP流相关方法 ====================
     
-    resetZoom() {
-      this.zoomLevel = 1
-    },
-    
-    handleWheel(event) {
-      event.preventDefault()
-      const delta = event.deltaY > 0 ? -0.05 : 0.05
-      this.zoomLevel += delta
-      if (this.zoomLevel > 3) this.zoomLevel = 3
-      if (this.zoomLevel < 0.1) this.zoomLevel = 0.1
-    },
-    
-    startDrag(event) {
-      this.isDragging = true
-      this.dragStartX = event.clientX
-      this.dragStartY = event.clientY
-    },
-    
-    drag(event) {
-      if (!this.isDragging) return
-      // 这里可以实现图片拖拽移动功能
-    },
-    
-    endDrag() {
-      this.isDragging = false
-    },
-    
-    downloadImage() {
-      if (!this.previewImageUrl) return
-      
-      const link = document.createElement('a')
-      link.href = this.previewImageUrl
-      link.download = `检测结果_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.jpg`
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
-      
-      ElMessage.success('图片下载已开始')
-    },
-    
-    downloadVideo() {
-      if (!this.previewVideoUrl) return
-      
-      const link = document.createElement('a')
-      link.href = this.previewVideoUrl
-      link.download = `检测结果_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.mp4`
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
-      
-      ElMessage.success('视频下载已开始')
-    },
-
-    // 预警相关
-    async onAlertSettingsChange() {
-      if (this.alertSettings.enableSound) {
-        this.$refs.alertAudio.volume = this.alertSettings.volume / 100
-        this.$refs.alertAudio.play().catch(e => {
-          console.error('播放预警音效失败:', e)
-          ElMessage.warning('预警音效播放失败，请检查浏览器权限或音频文件')
-        })
-      } else {
-        this.$refs.alertAudio.pause()
-        this.$refs.alertAudio.currentTime = 0
+    // 初始化RTSP流
+    async initRTSPStreams() {
+      if (this.detectionMode === 'rtsp') {
+        await this.loadRTSPStreams()
+        this.startRTSPUpdate()
       }
     },
-
-    testAlertSound() {
-      this.$refs.alertAudio.volume = this.alertSettings.volume / 100
-      this.$refs.alertAudio.play().then(() => {
-        ElMessage.success('预警音效测试成功！')
-      }).catch(e => {
-        console.error('预警音效测试失败:', e)
-        ElMessage.error('预警音效测试失败，请检查浏览器权限或音频文件')
-      })
+    
+    // 加载RTSP流列表
+    async loadRTSPStreams() {
+      try {
+        const response = await fetch(`http://localhost:5000/api/rtsp/streams?user_id=${this.$store.getters.currentUser?.id || 1}`)
+        const data = await response.json()
+        
+        if (data.success) {
+          this.rtspStreams = data.streams
+          console.log('✅ 加载RTSP流列表成功:', this.rtspStreams.length, '个流')
+        } else {
+          console.error('❌ 加载RTSP流列表失败:', data.message)
+        }
+      } catch (error) {
+        console.error('❌ 加载RTSP流列表异常:', error)
+      }
     },
-
-    openAlertPreview(alert) {
-      this.selectedAlert = alert
-      this.showAlertPreview = true
+    
+    // 根据位置获取流
+    getStreamByPosition(x, y) {
+      return this.rtspStreams.find(stream => stream.position_x === x && stream.position_y === y)
     },
-
-    closeAlertPreview() {
-      this.showAlertPreview = false
-      this.selectedAlert = null
+    
+    // 获取流状态
+    getStreamStatus(streamId) {
+      if (!streamId || !this.streamStatus[streamId]) return 'stopped'
+      return this.streamStatus[streamId].is_running ? 'running' : 'stopped'
     },
-
-    downloadAlertFrame() {
-      if (!this.selectedAlert || !this.selectedAlert.frameImage) return
-      const link = document.createElement('a')
-      link.href = this.selectedAlert.frameImage
-      link.download = `预警帧_${this.selectedAlert.targetId}_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.jpg`
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
-      ElMessage.success('预警帧下载已开始')
+    
+    // 获取流状态文本
+    getStreamStatusText(streamId) {
+      const status = this.getStreamStatus(streamId)
+      return status === 'running' ? '运行中' : '已停止'
     },
-
-         formatAlertTime(timestamp, isLarge = false) {
-       const date = new Date(timestamp * 1000)
-       const year = date.getFullYear()
-       const month = String(date.getMonth() + 1).padStart(2, '0')
-       const day = String(date.getDate()).padStart(2, '0')
-       const hours = String(date.getHours()).padStart(2, '0')
-       const minutes = String(date.getMinutes()).padStart(2, '0')
-       const seconds = String(date.getSeconds()).padStart(2, '0')
-       const formattedTime = `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
-       return isLarge ? formattedTime : `${hours}:${minutes}:${seconds}`
-     },
-
-     // 处理新目标预警
-     handleNewTargetAlerts(newTargets) {
-       const currentTime = Date.now() / 1000
-       
-       for (const target of newTargets) {
-         // 创建预警记录
-         const alert = {
-           id: `alert-${target.id}-${currentTime}`,
-           targetId: target.id,
-           targetClass: target.class,
-           confidence: target.confidence,
-           bbox: target.bbox,
-           frameImage: this.captureCurrentFrame(), // 捕获当前帧
-           timestamp: currentTime,
-           isNew: true
-         }
-         
-         // 添加到预警列表
-         this.realtimeAlerts.unshift(alert)
-         
-         // 限制预警列表长度，最多保留50条
-         if (this.realtimeAlerts.length > 50) {
-           this.realtimeAlerts = this.realtimeAlerts.slice(0, 50)
-         }
-         
-         // 播放预警音效
-         if (this.alertSettings.enableSound) {
-           this.playAlertSound()
-         }
-         
-         // 显示预警通知
-         this.showAlertNotification(alert)
-         
-         // 标记为非新预警（用于动画效果）
-         setTimeout(() => {
-           const alertIndex = this.realtimeAlerts.findIndex(a => a.id === alert.id)
-           if (alertIndex !== -1) {
-             this.realtimeAlerts[alertIndex].isNew = false
-           }
-         }, 3000)
-       }
-     },
-
-     // 播放预警音效
-     playAlertSound() {
-       if (!this.alertSettings.enableSound || !this.$refs.alertAudio) return
-       
-       try {
-         this.$refs.alertAudio.volume = this.alertSettings.volume / 100
-         this.$refs.alertAudio.currentTime = 0 // 重置播放位置
-         this.$refs.alertAudio.play().catch(e => {
-           console.error('播放预警音效失败:', e)
-         })
-       } catch (error) {
-         console.error('播放预警音效异常:', error)
-       }
-     },
-
-     // 显示预警通知
-     showAlertNotification(alert) {
-       ElNotification({
-         title: '新目标预警',
-         message: `检测到新目标: ${alert.targetClass} (ID: ${alert.targetId})`,
-         type: 'warning',
-         duration: 4000,
-         position: 'top-right',
-         showClose: true,
-         onClick: () => {
-           this.openAlertPreview(alert)
-         }
-       })
-     },
-
-     // 捕获当前摄像头帧
-     captureCurrentFrame() {
-       if (!this.$refs.cameraVideo || !this.$refs.cameraCanvas) return null
-       
-       try {
-         const video = this.$refs.cameraVideo
-         const canvas = this.$refs.cameraCanvas
-         const ctx = canvas.getContext('2d')
-         
-         canvas.width = video.videoWidth
-         canvas.height = video.videoHeight
-         
-         ctx.drawImage(video, 0, 0)
-         return canvas.toDataURL('image/jpeg', 0.8)
-       } catch (error) {
-         console.error('捕获当前帧失败:', error)
-         return null
-       }
-     },
-
-     // 分页处理
-     handleCountsPageChange(page) {
-       this.countsPagination.currentPage = page
-     },
-     
-     // 更新类别计数
-     updateClassCounts() {
-       // 更新分页总数
-       this.countsPagination.total = this.classCountsTotal
-       
-       // 如果当前页超出范围，重置为第一页
-       if (this.countsPagination.currentPage > Math.ceil(this.classCountsTotal / this.countsPagination.pageSize)) {
-         this.countsPagination.currentPage = 1
-       }
-     },
-
-     // 获取类别标签类型
-     getClassTagType(className) {
-       const tagTypes = {
-         'person': 'primary',
-         'car': 'success',
-         'truck': 'warning',
-         'bus': 'info',
-         'bicycle': 'danger',
-         'motorcycle': 'warning'
-       }
-       return tagTypes[className] || 'info'
-     },
-     
-     // 获取计数比例
-     getCountPercentage(count) {
-       if (!this.classCountsData.length) return 0
-       const maxCount = Math.max(...this.classCountsData.map(item => item.cumulativeTotal))
-       return maxCount === 0 ? 0 : Math.round((count / maxCount) * 100)
-     },
-
-     // 获取进度条颜色
-     getProgressColor(count) {
-       const percentage = this.getCountPercentage(count)
-       if (percentage >= 80) return '#67c23a'
-       if (percentage >= 60) return '#409eff'
-       if (percentage >= 40) return '#e6a23c'
-       return '#f56c6c'
-     }
+    
+    // 开始RTSP更新循环
+    startRTSPUpdate() {
+      if (this.rtspUpdateInterval) {
+        clearInterval(this.rtspUpdateInterval)
+      }
+      
+      this.rtspUpdateInterval = setInterval(async () => {
+        if (this.detectionMode === 'rtsp' && this.rtspStreams.length > 0) {
+          await this.updateRTSPData()
+        }
+      }, 1000)
+    },
+    
+    // 停止RTSP更新循环
+    stopRTSPUpdate() {
+      if (this.rtspUpdateInterval) {
+        clearInterval(this.rtspUpdateInterval)
+        this.rtspUpdateInterval = null
+      }
+    },
+    
+    // 更新RTSP数据
+    async updateRTSPData() {
+      try {
+        await this.updateStreamsStatus()
+        
+        for (const stream of this.rtspStreams) {
+          if (this.getStreamStatus(stream.id) === 'running') {
+            await this.updateStreamFrame(stream.id)
+          }
+        }
+      } catch (error) {
+        console.error('❌ 更新RTSP数据失败:', error)
+      }
+    },
+    
+    // 更新所有流状态
+    async updateStreamsStatus() {
+      try {
+        const response = await fetch(`http://localhost:5000/api/rtsp/status?user_id=${this.$store.getters.currentUser?.id || 1}`)
+        const data = await response.json()
+        
+        if (data.success) {
+          this.streamStatus = data.streams_status
+        }
+      } catch (error) {
+        console.error('❌ 更新流状态失败:', error)
+      }
+    },
+    
+    // 更新单个流的帧
+    async updateStreamFrame(streamId) {
+      try {
+        const response = await fetch(`http://localhost:5000/api/rtsp/streams/${streamId}/frame`)
+        const data = await response.json()
+        
+        if (data.success && data.frame) {
+          this.$set(this.streamFrames, streamId, data.frame)
+        }
+      } catch (error) {
+        // 静默处理帧更新错误
+      }
+    },
+    
+    // 切换流状态
+    async toggleStream(stream) {
+      try {
+        const isRunning = this.getStreamStatus(stream.id) === 'running'
+        const action = isRunning ? 'stop' : 'start'
+        
+        const response = await fetch(`http://localhost:5000/api/rtsp/streams/${stream.id}/${action}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            user_id: this.$store.getters.currentUser?.id || 1
+          })
+        })
+        
+        const data = await response.json()
+        
+        if (data.success) {
+          ElMessage.success(data.message)
+          await this.updateStreamsStatus()
+        } else {
+          ElMessage.error(data.message)
+        }
+      } catch (error) {
+        ElMessage.error(`操作流失败: ${error.message}`)
+      }
+    },
+    
+    // 启动所有流
+    async startAllStreams() {
+      try {
+        const response = await fetch('http://localhost:5000/api/rtsp/streams/start-all', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            user_id: this.$store.getters.currentUser?.id || 1
+          })
+        })
+        
+        const data = await response.json()
+        
+        if (data.success) {
+          ElMessage.success(data.message)
+          await this.updateStreamsStatus()
+        } else {
+          ElMessage.error(data.message)
+        }
+      } catch (error) {
+        ElMessage.error(`启动所有流失败: ${error.message}`)
+      }
+    },
+    
+    // 停止所有流
+    async stopAllStreams() {
+      try {
+        const response = await fetch('http://localhost:5000/api/rtsp/streams/stop-all', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        })
+        
+        const data = await response.json()
+        
+        if (data.success) {
+          ElMessage.success(data.message)
+          await this.updateStreamsStatus()
+        } else {
+          ElMessage.error(data.message)
+        }
+      } catch (error) {
+        ElMessage.error(`停止所有流失败: ${error.message}`)
+      }
+    },
+    
+    // 编辑流
+    editStream(stream) {
+      this.editingStream = stream
+      this.streamForm = {
+        name: stream.name,
+        url: stream.url,
+        username: stream.username || '',
+        password: stream.password || '',
+        model_path: stream.model_path,
+        detection_enabled: stream.detection_enabled,
+        tracking_enabled: stream.tracking_enabled,
+        counting_enabled: stream.counting_enabled,
+        alert_enabled: stream.alert_enabled,
+        is_active: stream.is_active
+      }
+      this.showAddStreamDialog = true
+    },
+    
+    // 删除流
+    async deleteStream(stream) {
+      try {
+        await this.$confirm(`确定要删除流 "${stream.name}" 吗？`, '确认删除', {
+          confirmButtonText: '确定',
+          cancelButtonText: '取消',
+          type: 'warning'
+        })
+        
+        const response = await fetch(`http://localhost:5000/api/rtsp/streams/${stream.id}?user_id=${this.$store.getters.currentUser?.id || 1}`, {
+          method: 'DELETE'
+        })
+        
+        const data = await response.json()
+        
+        if (data.success) {
+          ElMessage.success(data.message)
+          await this.loadRTSPStreams()
+        } else {
+          ElMessage.error(data.message)
+        }
+      } catch (error) {
+        if (error !== 'cancel') {
+          ElMessage.error(`删除流失败: ${error.message}`)
+        }
+      }
+    },
+    
+    // 保存流配置
+    async saveStream() {
+      try {
+        await this.$refs.streamFormRef.validate()
+        
+        this.streamSaving = true
+        
+        const streamData = {
+          ...this.streamForm,
+          user_id: this.$store.getters.currentUser?.id || 1
+        }
+        
+        let response
+        if (this.editingStream) {
+          response = await fetch(`http://localhost:5000/api/rtsp/streams/${this.editingStream.id}`, {
+            method: 'PUT',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(streamData)
+          })
+        } else {
+          response = await fetch('http://localhost:5000/api/rtsp/streams', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(streamData)
+          })
+        }
+        
+        const data = await response.json()
+        
+        if (data.success) {
+          ElMessage.success(data.message)
+          this.showAddStreamDialog = false
+          await this.loadRTSPStreams()
+        } else {
+          ElMessage.error(data.message)
+        }
+      } catch (error) {
+        if (error.message) {
+          ElMessage.error(`保存流失败: ${error.message}`)
+        }
+      } finally {
+        this.streamSaving = false
+      }
+    },
+    
+    // 重置流表单
+    resetStreamForm() {
+      this.editingStream = null
+      this.streamForm = {
+        name: '',
+        url: '',
+        username: '',
+        password: '',
+        model_path: 'yolov8n.pt',
+        detection_enabled: true,
+        tracking_enabled: false,
+        counting_enabled: false,
+        alert_enabled: false,
+        is_active: true
+      }
+      
+      if (this.$refs.streamFormRef) {
+        this.$refs.streamFormRef.clearValidate()
+      }
+    }
   },
   
   beforeUnmount() {
-    // 设置停止标志，防止异步操作继续
-    this.detectionStopped = true
     this.silentStopCamera()
     this.resetUpload()
+    this.stopRTSPUpdate()
     
-    // 清理预警相关状态
-    this.realtimeAlerts = []
-    this.showAlertPreview = false
-    this.selectedAlert = null
-    this.showAllAlerts = false
-    
-    // 停止预警音效
-    if (this.$refs.alertAudio) {
-      this.$refs.alertAudio.pause()
-      this.$refs.alertAudio.currentTime = 0
+    // 清理resize事件监听器
+    if (this.debouncedHandleResize) {
+      window.removeEventListener('resize', this.debouncedHandleResize)
     }
   }
 }
@@ -2056,73 +1133,6 @@ export default {
   justify-content: space-between;
   align-items: center;
   font-weight: 600;
-}
-
-.result-stats {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.tracking-controls, .segmentation-controls {
-  margin-bottom: 20px;
-}
-
-.tracking-card, .seg-card {
-  background: #f8f9fa;
-  border: 1px solid #e9ecef;
-}
-
-.tracking-card :deep(.el-card__header), .seg-card :deep(.el-card__header) {
-  background: #ffffff;
-  border-bottom: 1px solid #e9ecef;
-}
-
-.seg-card {
-  background: #f0f9ff;
-  border: 1px solid #e0f2fe;
-}
-
-.seg-card :deep(.el-card__header) {
-  background: #f8fafc;
-  border-bottom: 1px solid #e0f2fe;
-}
-
-.setting-desc {
-  font-size: 12px;
-  color: #6b7280;
-  margin-top: 4px;
-  line-height: 1.4;
-}
-
-.seg-tip {
-  color: #059669 !important;
-  font-weight: 500;
-}
-
-.counting-info {
-  padding: 10px;
-  background: #f0f9ff;
-  border: 1px solid #e0f2fe;
-  border-radius: 4px;
-  font-size: 13px;
-  color: #0369a1;
-}
-
-.counting-info p {
-  margin: 2px 0;
-}
-
-.realtime-stats {
-  margin-top: 20px;
-  padding: 15px;
-  background: #f0f2f5;
-  border-radius: 6px;
-}
-
-.realtime-stats :deep(.el-statistic__content) {
-  font-size: 18px;
-  color: #409eff;
 }
 
 .upload-card, .result-card {
@@ -2181,6 +1191,9 @@ export default {
   max-width: 100%;
   max-height: 300px;
   border-radius: 8px;
+  /* 优化resize性能 */
+  contain: layout;
+  transform: translateZ(0);
 }
 
 .camera-section {
@@ -2199,22 +1212,14 @@ export default {
   overflow: hidden;
 }
 
-.camera-overlay-container {
-  border-color: #409eff;
-}
-
 .camera-video {
   width: 100%;
   height: 100%;
   object-fit: cover;
   border-radius: 8px;
-}
-
-.camera-canvas {
-  position: absolute;
-  top: 0;
-  left: 0;
-  visibility: hidden;
+  /* 优化resize性能 */
+  contain: layout;
+  transform: translateZ(0);
 }
 
 .camera-placeholder {
@@ -2227,129 +1232,41 @@ export default {
   margin-bottom: 10px;
 }
 
-.camera-detection-overlay {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
-  z-index: 10;
-}
-
-.detection-box {
-  position: absolute;
-  border: 2px solid #00ff00;
-  background: rgba(0, 255, 0, 0.1);
-  pointer-events: none;
-  transition: all 0.3s ease-in-out;
-  animation: fadeIn 0.2s ease-out;
-}
-
-.tracking-box {
-  position: absolute;
-  border: 2px solid #0066ff;
-  background: rgba(0, 102, 255, 0.1);
-  pointer-events: none;
-  transition: all 0.3s ease-in-out;
-  animation: fadeIn 0.2s ease-out;
-}
-
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: scale(0.95);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
-.detection-label {
-  position: absolute;
-  top: -25px;
-  left: 0;
-  background: #00ff00;
-  color: black;
-  padding: 2px 6px;
-  font-size: 12px;
-  border-radius: 3px;
-  white-space: nowrap;
-  pointer-events: none;
-}
-
-.tracking-label {
-  position: absolute;
-  top: -25px;
-  left: 0;
-  background: #0066ff;
-  color: white;
-  padding: 2px 6px;
-  font-size: 12px;
-  border-radius: 3px;
-  white-space: nowrap;
-  pointer-events: none;
+.camera-controls {
+  margin-top: 15px;
+  text-align: center;
 }
 
 .detection-controls {
-  display: flex;
-  gap: 10px;
-  justify-content: center;
   margin-top: 20px;
+  text-align: center;
+}
+
+.detection-controls .el-button {
+  margin: 0 10px;
 }
 
 .result-content {
-  position: relative;
   min-height: 400px;
 }
 
 .result-media {
   margin-bottom: 20px;
   text-align: center;
-  position: relative;
 }
 
 .result-image, .result-video {
   max-width: 100%;
-  max-height: 350px;
+  max-height: 400px;
   border-radius: 8px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-  cursor: pointer;
-  transition: transform 0.3s ease;
-}
-
-.result-image:hover, .result-video:hover {
-  transform: scale(1.02);
-}
-
-.image-overlay, .video-overlay {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background: rgba(0, 0, 0, 0.6);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  opacity: 0;
-  transition: opacity 0.3s ease;
-  border-radius: 8px;
-}
-
-.result-media:hover .image-overlay,
-.result-media:hover .video-overlay {
-  opacity: 1;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  /* 优化resize性能 */
+  contain: layout;
+  transform: translateZ(0);
 }
 
 .detection-list {
   margin-top: 20px;
-}
-
-.detection-list h4 {
-  margin-bottom: 15px;
-  color: #333;
 }
 
 .bbox-info {
@@ -2362,439 +1279,137 @@ export default {
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 300px;
+  height: 400px;
 }
 
-.realtime-stats {
-  text-align: center;
-  margin-top: 20px;
-  padding: 10px;
-  background: #f5f7fa;
-  border-radius: 8px;
-}
-
-.loading-result {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.preview-container {
-  position: relative;
-  width: 100%;
-  height: 80vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: #f5f5f5;
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-.preview-image {
-  max-width: 100%;
-  max-height: 100%;
-  object-fit: contain;
-  transition: transform 0.1s ease;
-  user-select: none;
-}
-
-.preview-video {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  border-radius: 8px;
-}
-
-.preview-controls {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  background: rgba(0, 0, 0, 0.7);
-  padding: 10px;
-  border-radius: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  backdrop-filter: blur(10px);
-}
-
-.preview-controls .el-button {
-  background: rgba(255, 255, 255, 0.2);
-  border: 1px solid rgba(255, 255, 255, 0.3);
-  color: white;
-}
-
-.preview-controls .el-button:hover {
-  background: rgba(255, 255, 255, 0.3);
-}
-
-.zoom-info {
-  color: white;
-  font-size: 12px;
-  text-align: center;
-  margin-top: 5px;
-  padding: 4px 8px;
-  background: rgba(255, 255, 255, 0.2);
-  border-radius: 4px;
-}
-
-:deep(.el-radio-button__inner) {
-  padding: 12px 20px;
-}
-
-/* 类别计数样式 */
-.class-counts {
-  margin-top: 20px;
-  padding: 15px;
+/* RTSP相关样式 */
+.rtsp-manager-card {
   background: #f8f9fa;
-  border-radius: 8px;
   border: 1px solid #e9ecef;
 }
 
-.class-counts h4 {
-  margin-bottom: 15px;
-  color: #495057;
-  font-weight: 600;
-}
-
-.count-number {
-  font-weight: 600;
-  font-size: 16px;
-  color: #409eff;
-}
-
-.count-number.cumulative {
-  color: #67c23a;
-}
-
-.percentage-text {
-  font-size: 12px;
-  color: #666;
-  margin-left: 8px;
-}
-
-.counts-pagination {
-  margin-top: 15px;
+.rtsp-controls {
   display: flex;
-  justify-content: center;
+  gap: 10px;
 }
 
-.empty-counts {
-  text-align: center;
-  padding: 20px;
+.rtsp-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+  gap: 15px;
+  height: 500px;
+  /* 防止ResizeObserver问题 */
+  contain: layout style;
+  will-change: auto;
+}
+
+.rtsp-grid-item {
+  border: 2px dashed #d9d9d9;
+  border-radius: 8px;
+  overflow: hidden;
+  position: relative;
+}
+
+.rtsp-grid-item.has-stream {
+  border-color: #409eff;
+  border-style: solid;
+}
+
+.stream-container {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.stream-video-container {
+  flex: 1;
+  position: relative;
+  background: #000;
+}
+
+.stream-frame {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  /* 优化resize性能 */
+  contain: layout;
+  transform: translateZ(0);
+}
+
+.stream-placeholder {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   color: #999;
 }
 
-.class-counts .el-table {
-  border-radius: 6px;
-  overflow: hidden;
-}
-
-.class-counts :deep(.el-table__header-wrapper) {
-  background: #f5f7fa;
-}
-
-.alert-info {
-  margin-top: 8px;
-  padding: 8px 12px;
-  background: #fef0f0;
-  border: 1px solid #fcdcdc;
-  border-radius: 4px;
-  font-size: 12px;
-}
-
-.alert-info .el-icon {
-  margin-right: 4px;
-}
-
-.class-counts :deep(.el-table__row:hover) {
-  background: #f0f9ff;
-}
-
-.class-counts :deep(.el-tag) {
-  font-weight: 500;
-}
-
-.class-counts :deep(.el-progress__text) {
-  display: none;
-}
-
-.class-counts :deep(.el-progress-bar) {
-  margin-bottom: 2px;
-}
-
-/* 实时预警样式 */
-.realtime-alerts {
-  margin-top: 20px;
-  padding: 15px;
-  background: #f8f9fa;
-  border-radius: 8px;
-  border: 1px solid #e9ecef;
-}
-
-.alerts-title {
-  display: flex;
-  align-items: center;
-  margin-bottom: 15px;
-  color: #333;
-  font-weight: 600;
-}
-
-.alerts-title .el-icon {
-  margin-right: 8px;
-  color: #f56c6c;
-}
-
-.alerts-container {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
+.stream-icon {
+  font-size: 48px;
   margin-bottom: 10px;
 }
 
-.alert-item {
-  display: flex;
-  align-items: center;
-  background: #fffbe6;
-  border: 1px solid #ffe58f;
-  border-radius: 6px;
-  overflow: hidden;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-  transition: transform 0.2s ease;
+.stream-info {
+  padding: 10px;
+  background: #f5f5f5;
+  border-top: 1px solid #ddd;
 }
 
-.alert-item:hover {
-  transform: translateY(-2px);
-}
-
-.alert-item.alert-new {
-  border-left: 4px solid #faad14;
-  animation: pulse 1.5s infinite;
-}
-
-.alert-image-container {
-  position: relative;
-  width: 100px;
-  height: 75px;
-  overflow: hidden;
-  flex-shrink: 0;
-}
-
-.alert-frame-image {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  border-radius: 4px;
-  cursor: pointer;
-}
-
-.alert-overlay {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background: rgba(0, 0, 0, 0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  opacity: 0;
-  transition: opacity 0.3s ease;
-}
-
-.alert-item:hover .alert-overlay {
-  opacity: 1;
-}
-
-.alert-info {
-  padding: 10px 15px;
-  flex-grow: 1;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-}
-
-.alert-header {
-  display: flex;
-  align-items: center;
-  margin-bottom: 5px;
-}
-
-.alert-header .el-tag {
-  margin-right: 8px;
-}
-
-.alert-details {
-  font-size: 13px;
-  color: #515a6e;
+.stream-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  margin-bottom: 10px;
 }
 
-.alert-class {
-  font-weight: 500;
-  color: #faad14;
+.stream-name {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
 }
 
-.alert-confidence {
-  font-size: 12px;
-  color: #909399;
-}
-
-.more-alerts {
+.stream-controls {
   text-align: center;
-  margin-top: 10px;
 }
 
-.all-alerts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-top: 10px;
-}
-
-.alert-item-compact {
-  display: flex;
-  align-items: center;
-  background: #f0f9eb;
-  border: 1px solid #e1f3d8;
-  border-radius: 6px;
-  overflow: hidden;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-  transition: transform 0.2s ease;
-}
-
-.alert-item-compact:hover {
-  transform: translateY(-2px);
-}
-
-.alert-frame-image-small {
-  width: 50px;
-  height: 38px;
-  object-fit: cover;
-  border-radius: 4px;
-  cursor: pointer;
-}
-
-.alert-info-compact {
-  padding: 8px 10px;
-  flex-grow: 1;
+.empty-grid-item {
   display: flex;
   flex-direction: column;
+  align-items: center;
   justify-content: center;
+  color: #999;
+  cursor: pointer;
+  transition: all 0.3s;
+}
+
+.empty-grid-item:hover {
+  border-color: #409eff;
+  color: #409eff;
+}
+
+.add-stream-icon {
+  font-size: 48px;
+  margin-bottom: 10px;
+}
+
+/* 对话框样式 */
+.form-tip {
   font-size: 12px;
-  color: #606266;
+  color: #999;
+  margin-top: 5px;
 }
 
-.alert-info-compact .el-tag {
-  margin-right: 5px;
+.feature-settings {
+  display: flex;
+  gap: 15px;
+  flex-wrap: wrap;
 }
 
-.alert-info-compact .el-tag.is-small {
-  font-size: 12px;
+.dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
 }
-
-.alert-time {
-  font-size: 11px;
-  color: #909399;
-  margin-top: 3px;
-}
-
- @keyframes pulse {
-   0% {
-     box-shadow: 0 0 0 0 rgba(250, 173, 20, 0.4);
-   }
-   70% {
-     box-shadow: 0 0 0 10px rgba(250, 173, 20, 0);
-   }
-   100% {
-     box-shadow: 0 0 0 0 rgba(250, 173, 20, 0);
-   }
- }
-
- /* 预警详情对话框样式 */
- .alert-preview-container {
-   padding: 20px;
- }
-
- .alert-preview-header {
-   margin-bottom: 20px;
- }
-
- .alert-preview-info {
-   display: flex;
-   flex-direction: column;
-   gap: 15px;
- }
-
- .alert-meta {
-   display: flex;
-   gap: 20px;
-   align-items: center;
-   flex-wrap: wrap;
- }
-
- .alert-class-large {
-   font-size: 18px;
-   font-weight: 600;
-   color: #faad14;
- }
-
- .alert-confidence-large {
-   font-size: 16px;
-   font-weight: 500;
-   color: #67c23a;
- }
-
- .alert-time-large {
-   font-size: 14px;
-   color: #909399;
- }
-
- .alert-preview-image {
-   position: relative;
-   text-align: center;
-   margin-bottom: 20px;
- }
-
- .alert-frame-large {
-   max-width: 100%;
-   max-height: 400px;
-   border-radius: 8px;
-   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
- }
-
- .alert-image-controls {
-   margin-top: 15px;
- }
-
- .alert-preview-details h4 {
-   margin-bottom: 15px;
-   color: #333;
-   font-weight: 600;
- }
-
- /* 预警提示音设置样式 */
- .alert-sound-settings {
-   margin-top: 10px;
-   padding: 10px;
-   background: #f8f9fa;
-   border-radius: 6px;
-   border: 1px solid #e9ecef;
- }
-
- .alert-sound-settings .el-form-item {
-   margin-bottom: 10px;
- }
-
- .alert-sound-settings .el-button {
-   margin-top: 5px;
- }
- </style> 
+</style>
