@@ -2,7 +2,7 @@ Flask
 Flask-CORS
 Flask-SQLAlchemy
 ultralytics
-opencv-pytho
+opencv-python
 Pillow
 numpy
 torch
