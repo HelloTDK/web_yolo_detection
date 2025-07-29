@@ -1,6 +1,5 @@
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
-from flask_sqlalchemy import SQLAlchemy
 from werkzeug.utils import secure_filename
 import os
 import cv2
@@ -15,6 +14,11 @@ from collections import defaultdict, deque
 import time
 from yolo_seg_handler import YOLOSegmentationHandler
 
+# 导入新的模块
+from models.database import db, User, DetectionResult, AlertRecord, RTSPStream
+from routes.rtsp_routes import rtsp_bp
+from services.rtsp_handler import rtsp_manager
+
 app = Flask(__name__)
 CORS(app)
 
@@ -25,51 +29,15 @@ app.config['UPLOAD_FOLDER'] = 'uploads'
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB max file size
 app.config['SECRET_KEY'] = 'yolo-detection-secret-key-2024'
 
-db = SQLAlchemy(app)
+# 初始化数据库
+db.init_app(app)
+
+# 注册蓝图
+app.register_blueprint(rtsp_bp)
 
 # 确保上传目录存在
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 os.makedirs('static', exist_ok=True)
-
-# 数据库模型
-class User(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(80), unique=True, nullable=False)
-    password = db.Column(db.String(255), nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
-class DetectionResult(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    detection_type = db.Column(db.String(20), nullable=False)  # image, video, camera
-    original_file = db.Column(db.String(255))
-    result_file = db.Column(db.String(255))
-    detections = db.Column(db.Text)  # JSON格式的检测结果
-    confidence = db.Column(db.Float)
-    # 新增字段用于跟踪和计数
-    tracking_enabled = db.Column(db.Boolean, default=False)
-    tracking_results = db.Column(db.Text)  # JSON格式的跟踪结果
-    counting_enabled = db.Column(db.Boolean, default=False)
-    counting_class = db.Column(db.String(50))  # 计数的目标类别
-    counting_results = db.Column(db.Text)  # JSON格式的计数结果
-    total_count = db.Column(db.Integer, default=0)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
-class AlertRecord(db.Model):
-    """预警记录表"""
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    detection_result_id = db.Column(db.Integer, db.ForeignKey('detection_result.id'), nullable=True)
-    alert_type = db.Column(db.String(20), default='new_target')  # 预警类型：new_target(新目标出现)
-    target_id = db.Column(db.Integer, nullable=False)  # 触发预警的目标ID
-    target_class = db.Column(db.String(50), nullable=False)  # 目标类别
-    frame_number = db.Column(db.Integer, nullable=True)  # 视频帧号（如果是视频）
-    frame_image = db.Column(db.String(255), nullable=False)  # 预警帧图像文件路径
-    bbox = db.Column(db.Text)  # JSON格式的边界框坐标
-    confidence = db.Column(db.Float)  # 检测置信度
-    description = db.Column(db.Text)  # 预警描述
-    is_handled = db.Column(db.Boolean, default=False)  # 是否已处理
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 # 初始化YOLO模型
 model = None
@@ -1915,9 +1883,55 @@ if __name__ == '__main__':
     # 加载YOLO模型
     load_yolo_model()
     
-    print("🚀 启动YOLO检测识别系统...")
+    # 初始化RTSP流管理器并加载已配置的流
+    def init_rtsp_streams():
+        """初始化RTSP流"""
+        try:
+            with app.app_context():
+                # 获取所有活跃的RTSP流
+                active_streams = RTSPStream.query.filter_by(is_active=True).all()
+                
+                for stream in active_streams:
+                    stream_config = {
+                        'id': stream.id,
+                        'name': stream.name,
+                        'url': stream.url,
+                        'username': stream.username,
+                        'password': stream.password,
+                        'detection_enabled': stream.detection_enabled,
+                        'model_path': stream.model_path,
+                        'tracking_enabled': stream.tracking_enabled,
+                        'counting_enabled': stream.counting_enabled,
+                        'alert_enabled': stream.alert_enabled
+                    }
+                    
+                    if rtsp_manager.add_stream(stream_config):
+                        print(f"✅ RTSP流已加载: {stream.name}")
+                    else:
+                        print(f"❌ RTSP流加载失败: {stream.name}")
+                        
+                print(f"📺 共加载 {len(active_streams)} 个RTSP流配置")
+                
+        except Exception as e:
+            print(f"❌ 初始化RTSP流失败: {e}")
+    
+    # 启动时初始化RTSP流
+    init_rtsp_streams()
+    
+    print("🚀 启动YOLO检测识别系统 v2.1...")
     print("📊 数据库: SQLite (yolo_detection.db)")
     print("🌐 访问地址: http://localhost:5000")
     print("👤 默认账号: admin / admin123")
+    print("📺 新功能: RTSP流实时检测")
+    print("🔧 后端重构: 模块化架构")
     
-    app.run(debug=True, host='0.0.0.0', port=5000) 
+    try:
+        app.run(debug=True, host='0.0.0.0', port=5000, threaded=True)
+    except KeyboardInterrupt:
+        print("\n🛑 正在关闭系统...")
+        # 清理RTSP资源
+        rtsp_manager.cleanup()
+        print("✅ 系统已安全关闭")
+    except Exception as e:
+        print(f"❌ 系统启动失败: {e}")
+        rtsp_manager.cleanup()
