@@ -192,24 +192,33 @@ def delete_stream(stream_id):
     """删除RTSP流"""
     try:
         user_id = request.args.get('user_id', 1)
+        print(f"🗑️ 请求删除流: ID={stream_id}, User={user_id}")
         
         stream = RTSPStream.query.filter_by(id=stream_id, user_id=user_id).first()
         if not stream:
+            print(f"❌ 流不存在: ID={stream_id}, User={user_id}")
             return jsonify({'success': False, 'message': '流不存在'}), 404
         
+        stream_name = stream.name
+        print(f"🔍 找到流: {stream_name} (ID={stream_id})")
+        
         # 停止并移除流
+        print(f"⏹️ 停止并移除流管理器中的流...")
         rtsp_manager.remove_stream(stream_id)
         
         # 删除数据库记录
+        print(f"🗄️ 删除数据库记录...")
         db.session.delete(stream)
         db.session.commit()
         
+        print(f"✅ 流 '{stream_name}' 删除成功")
         return jsonify({
             'success': True,
-            'message': 'RTSP流删除成功'
+            'message': f'RTSP流 "{stream_name}" 删除成功'
         })
         
     except Exception as e:
+        print(f"❌ 删除流异常: {e}")
         db.session.rollback()
         return jsonify({'success': False, 'message': f'删除流失败: {str(e)}'}), 500
 
@@ -293,17 +302,21 @@ def stop_all_streams():
 def get_stream_frame(stream_id):
     """获取RTSP流的最新帧"""
     try:
+        print(f"🌐 API请求获取流 {stream_id} 的帧")
         frame_base64 = rtsp_manager.get_stream_frame(stream_id)
         
         if frame_base64:
+            print(f"✅ API成功返回流 {stream_id} 的帧")
             return jsonify({
                 'success': True,
                 'frame': frame_base64
             })
         else:
+            print(f"❌ API无法获取流 {stream_id} 的帧")
             return jsonify({'success': False, 'message': '获取帧失败'}), 404
         
     except Exception as e:
+        print(f"❌ API获取流 {stream_id} 帧时异常: {e}")
         return jsonify({'success': False, 'message': f'获取帧失败: {str(e)}'}), 500
 
 @rtsp_bp.route('/streams/<int:stream_id>/detections', methods=['GET'])
@@ -365,6 +378,39 @@ def get_all_status():
         
     except Exception as e:
         return jsonify({'success': False, 'message': f'获取状态失败: {str(e)}'}), 500
+
+@rtsp_bp.route('/debug', methods=['GET'])
+def get_debug_info():
+    """获取调试信息"""
+    try:
+        # 获取所有流的详细信息
+        streams = RTSPStream.query.all()
+        handlers = list(rtsp_manager.handlers.keys())
+        
+        debug_info = {
+            'database_streams': [{'id': s.id, 'name': s.name, 'url': s.url} for s in streams],
+            'active_handlers': handlers,
+            'handler_details': {}
+        }
+        
+        # 获取每个处理器的详细信息
+        for stream_id in handlers:
+            handler = rtsp_manager.handlers[stream_id]
+            debug_info['handler_details'][stream_id] = {
+                'is_running': handler.is_running,
+                'has_frame': handler.latest_frame is not None,
+                'frame_count': handler.frame_count,
+                'fps': handler.fps,
+                'detection_count': len(handler.latest_detections)
+            }
+        
+        return jsonify({
+            'success': True,
+            'debug_info': debug_info
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'message': f'获取调试信息失败: {str(e)}'}), 500
 
 def _find_available_position(existing_streams):
     """查找可用的四宫格位置"""

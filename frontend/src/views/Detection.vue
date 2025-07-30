@@ -38,7 +38,7 @@
     
     <el-row :gutter="20">
       <!-- 左侧：上传和控制区域 -->
-      <el-col :span="12">
+      <el-col :span="detectionMode === 'rtsp' ? 24 : 12">
         <el-card class="upload-card" shadow="hover">
           <template #header>
             <div class="card-header">
@@ -176,8 +176,60 @@
                   :class="{ 'has-stream': getStreamByPosition(position.x, position.y) }"
                 >
                   <div v-if="getStreamByPosition(position.x, position.y)" class="stream-container">
+                    <!-- 流信息标题栏 -->
+                    <div class="stream-header-bar">
+                      <div class="stream-title-info">
+                        <h4 class="stream-name">{{ getStreamByPosition(position.x, position.y).name }}</h4>
+                        <el-tag 
+                          :type="getStreamStatus(getStreamByPosition(position.x, position.y).id) === 'running' ? 'success' : 'danger'"
+                          size="small"
+                        >
+                          {{ getStreamStatusText(getStreamByPosition(position.x, position.y).id) }}
+                        </el-tag>
+                      </div>
+                      
+                      <!-- 控制按钮 -->
+                      <div class="stream-control-buttons">
+                        <el-button-group size="mini">
+                          <el-button 
+                            :type="getStreamStatus(getStreamByPosition(position.x, position.y).id) === 'running' ? 'danger' : 'success'"
+                            @click="toggleStream(getStreamByPosition(position.x, position.y))"
+                            :title="getStreamStatus(getStreamByPosition(position.x, position.y).id) === 'running' ? '停止' : '播放'"
+                          >
+                            <el-icon v-if="getStreamStatus(getStreamByPosition(position.x, position.y).id) === 'running'">
+                              <VideoPause />
+                            </el-icon>
+                            <el-icon v-else><VideoPlay /></el-icon>
+                          </el-button>
+                          <el-button 
+                            type="primary"
+                            @click="openStreamPreview(getStreamByPosition(position.x, position.y))"
+                            v-if="getStreamStatus(getStreamByPosition(position.x, position.y).id) === 'running'"
+                            title="全屏预览"
+                          >
+                            <el-icon><ZoomIn /></el-icon>
+                          </el-button>
+                          <el-button 
+                            @click="editStream(getStreamByPosition(position.x, position.y))"
+                            title="设置"
+                          >
+                            <el-icon><Setting /></el-icon>
+                          </el-button>
+                          <el-button 
+                            type="danger" 
+                            @click="deleteStream(getStreamByPosition(position.x, position.y))"
+                            :loading="deletingStreamIds.has(getStreamByPosition(position.x, position.y).id)"
+                            :disabled="deletingStreamIds.has(getStreamByPosition(position.x, position.y).id)"
+                            title="删除"
+                          >
+                            <el-icon v-if="!deletingStreamIds.has(getStreamByPosition(position.x, position.y).id)"><Delete /></el-icon>
+                          </el-button>
+                        </el-button-group>
+                      </div>
+                    </div>
+                    
                     <!-- 流视频显示 -->
-                    <div class="stream-video-container">
+                    <div class="stream-video-container" @click="openStreamPreview(getStreamByPosition(position.x, position.y))">
                       <img 
                         v-if="streamFrames[getStreamByPosition(position.x, position.y).id]"
                         :src="streamFrames[getStreamByPosition(position.x, position.y).id]"
@@ -189,48 +241,32 @@
                         <p>{{ getStreamByPosition(position.x, position.y).name }}</p>
                         <p class="stream-status">等待连接...</p>
                       </div>
+                      
+                      <!-- 预览提示覆盖层 -->
+                      <div v-if="streamFrames[getStreamByPosition(position.x, position.y).id]" class="preview-overlay">
+                        <el-icon><ZoomIn /></el-icon>
+                        <span>点击全屏预览</span>
+                      </div>
                     </div>
                     
-                    <!-- 流信息和控制 -->
-                    <div class="stream-info">
-                      <div class="stream-header">
-                        <h4 class="stream-name">{{ getStreamByPosition(position.x, position.y).name }}</h4>
-                        <div class="stream-status-indicator">
-                          <el-tag 
-                            :type="getStreamStatus(getStreamByPosition(position.x, position.y).id) === 'running' ? 'success' : 'danger'"
-                            size="small"
-                          >
-                            {{ getStreamStatusText(getStreamByPosition(position.x, position.y).id) }}
-                          </el-tag>
-                        </div>
-                      </div>
-                      
-                      <div class="stream-controls">
-                        <el-button-group size="small">
-                          <el-button 
-                            :type="getStreamStatus(getStreamByPosition(position.x, position.y).id) === 'running' ? 'danger' : 'success'"
-                            @click="toggleStream(getStreamByPosition(position.x, position.y))"
-                          >
-                            <el-icon v-if="getStreamStatus(getStreamByPosition(position.x, position.y).id) === 'running'">
-                              <VideoPause />
-                            </el-icon>
-                            <el-icon v-else><VideoPlay /></el-icon>
-                          </el-button>
-                          <el-button @click="editStream(getStreamByPosition(position.x, position.y))">
-                            <el-icon><Setting /></el-icon>
-                          </el-button>
-                          <el-button type="danger" @click="deleteStream(getStreamByPosition(position.x, position.y))">
-                            <el-icon><Delete /></el-icon>
-                          </el-button>
-                        </el-button-group>
-                      </div>
+                    <!-- 流统计信息 -->
+                    <div v-if="getStreamStatus(getStreamByPosition(position.x, position.y).id) === 'running'" class="stream-stats-bar">
+                      <small>{{ getStreamStats(getStreamByPosition(position.x, position.y).id) }}</small>
                     </div>
                   </div>
                   
                   <!-- 空位置 -->
-                  <div v-else class="empty-grid-item" @click="showAddStreamDialog = true">
+                  <div v-else class="empty-grid-item">
                     <el-icon class="add-stream-icon"><Plus /></el-icon>
                     <p>点击添加RTSP流</p>
+                    <div class="quick-actions">
+                      <el-button type="primary" size="small" @click="showAddStreamDialog = true">
+                        添加流
+                      </el-button>
+                      <el-button type="success" size="small" @click="createTestStream">
+                        创建测试流
+                      </el-button>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -258,7 +294,7 @@
       </el-col>
       
       <!-- 右侧：检测结果区域 -->
-      <el-col :span="12">
+      <el-col :span="12" v-if="detectionMode !== 'rtsp'">
         <el-card class="result-card" shadow="hover">
           <template #header>
             <div class="card-header">
@@ -326,6 +362,68 @@
       </el-col>
     </el-row>
     
+    <!-- 流预览对话框 -->
+    <el-dialog
+      v-model="showPreviewDialog"
+      :title="`${currentPreviewStream?.name || ''} - 实时预览`"
+      width="80%"
+      top="5vh"
+      destroy-on-close
+      :before-close="closeStreamPreview"
+    >
+      <div class="preview-container">
+        <div class="preview-video">
+          <img 
+            v-if="currentPreviewStream && streamFrames[currentPreviewStream.id]"
+            :src="streamFrames[currentPreviewStream.id]"
+            class="preview-frame"
+            :alt="`${currentPreviewStream.name} - 实时预览`"
+          />
+          <div v-else class="preview-placeholder">
+            <el-icon class="preview-icon"><VideoPlay /></el-icon>
+            <p>等待视频流...</p>
+          </div>
+        </div>
+        
+        <!-- 预览控制栏 -->
+        <div class="preview-controls">
+          <div class="preview-info">
+            <el-tag 
+              :type="getStreamStatus(currentPreviewStream?.id) === 'running' ? 'success' : 'danger'"
+              size="large"
+            >
+              {{ getStreamStatusText(currentPreviewStream?.id) }}
+            </el-tag>
+            <span class="preview-stats">{{ getStreamStats(currentPreviewStream?.id) }}</span>
+          </div>
+          
+          <div class="preview-buttons">
+            <el-button-group>
+              <el-button 
+                :type="getStreamStatus(currentPreviewStream?.id) === 'running' ? 'danger' : 'success'"
+                @click="toggleStream(currentPreviewStream)"
+                v-if="currentPreviewStream"
+              >
+                <el-icon v-if="getStreamStatus(currentPreviewStream.id) === 'running'">
+                  <VideoPause />
+                </el-icon>
+                <el-icon v-else><VideoPlay /></el-icon>
+                {{ getStreamStatus(currentPreviewStream.id) === 'running' ? '停止' : '播放' }}
+              </el-button>
+              <el-button @click="refreshPreview">
+                <el-icon><Refresh /></el-icon>
+                刷新
+              </el-button>
+              <el-button @click="closeStreamPreview">
+                <el-icon><Close /></el-icon>
+                关闭
+              </el-button>
+            </el-button-group>
+          </div>
+        </div>
+      </div>
+    </el-dialog>
+    
     <!-- RTSP流配置对话框 -->
     <el-dialog
       v-model="showAddStreamDialog"
@@ -358,6 +456,16 @@
           <div class="form-tip">
             例如: rtsp://admin:123456@192.168.1.100:554/stream1
           </div>
+          <el-button 
+            type="primary" 
+            size="small" 
+            :loading="testingConnection"
+            @click="testRTSPConnection"
+            style="margin-top: 10px;"
+          >
+            <el-icon><Link /></el-icon>
+            测试连接
+          </el-button>
         </el-form-item>
         
         <el-form-item label="用户名">
@@ -429,6 +537,7 @@
 
 <script>
 import { ElMessage, ElNotification } from 'element-plus'
+import { reactive } from 'vue'
 import { 
   Picture, 
   VideoPlay, 
@@ -438,7 +547,8 @@ import {
   RefreshRight,
   VideoPause,
   Setting,
-  Delete
+  Delete,
+  Link
 } from '@element-plus/icons-vue'
 
 export default {
@@ -452,7 +562,8 @@ export default {
     RefreshRight,
     VideoPause,
     Setting,
-    Delete
+    Delete,
+    Link
   },
   data() {
     return {
@@ -467,10 +578,18 @@ export default {
       // RTSP流相关数据
       showAddStreamDialog: false,
       editingStream: null,
+      
+      // 预览相关
+      showPreviewDialog: false,
+      currentPreviewStream: null,
+      
+      // 删除状态
+      deletingStreamIds: new Set(),
       streamSaving: false,
+      testingConnection: false,
       rtspStreams: [],
-      streamFrames: {},
-      streamStatus: {},
+      streamFrames: reactive({}), // 使用响应式对象
+      streamStatus: reactive({}), // 使用响应式对象
       rtspUpdateInterval: null,
       
       // 四宫格位置
@@ -836,14 +955,38 @@ export default {
     
     // 获取流状态
     getStreamStatus(streamId) {
-      if (!streamId || !this.streamStatus[streamId]) return 'stopped'
-      return this.streamStatus[streamId].is_running ? 'running' : 'stopped'
+      if (!streamId || !this.streamStatus[streamId]) {
+        console.log(`⚠️ 流 ${streamId} 状态信息不存在`)
+        return 'stopped'
+      }
+      const status = this.streamStatus[streamId]
+      console.log(`🔍 流 ${streamId} 详细状态:`, status)
+      
+      // 检查不同的状态字段可能性
+      let isRunning = false
+      if (status.status && typeof status.status === 'object' && status.status.is_running !== undefined) {
+        isRunning = status.status.is_running
+      } else if (status.is_running !== undefined) {
+        isRunning = status.is_running
+      } else if (status.status === 'running') {
+        isRunning = true
+      }
+      
+      console.log(`🎯 流 ${streamId} 运行状态: ${isRunning}`)
+      return isRunning ? 'running' : 'stopped'
     },
     
     // 获取流状态文本
     getStreamStatusText(streamId) {
       const status = this.getStreamStatus(streamId)
       return status === 'running' ? '运行中' : '已停止'
+    },
+    
+    // 获取流统计信息
+    getStreamStats(streamId) {
+      if (!streamId || !this.streamStatus[streamId]) return ''
+      const status = this.streamStatus[streamId]
+      return `FPS: ${status.fps || 0} | 检测: ${status.detection_count || 0}`
     },
     
     // 开始RTSP更新循环
@@ -856,7 +999,7 @@ export default {
         if (this.detectionMode === 'rtsp' && this.rtspStreams.length > 0) {
           await this.updateRTSPData()
         }
-      }, 1000)
+      }, 500) // 减少到500ms，提高实时性
     },
     
     // 停止RTSP更新循环
@@ -873,8 +1016,13 @@ export default {
         await this.updateStreamsStatus()
         
         for (const stream of this.rtspStreams) {
-          if (this.getStreamStatus(stream.id) === 'running') {
+          const status = this.getStreamStatus(stream.id)
+          console.log(`📊 流 ${stream.id} (${stream.name}) 状态: ${status}`)
+          
+          if (status === 'running') {
             await this.updateStreamFrame(stream.id)
+          } else {
+            console.log(`⚠️ 流 ${stream.id} 未运行，状态: ${status}`)
           }
         }
       } catch (error) {
@@ -889,7 +1037,12 @@ export default {
         const data = await response.json()
         
         if (data.success) {
-          this.streamStatus = data.streams_status
+          // 清空并重新赋值以确保响应式更新
+          Object.keys(this.streamStatus).forEach(key => {
+            delete this.streamStatus[key]
+          })
+          Object.assign(this.streamStatus, data.streams_status)
+          console.log('📊 流状态已更新:', Object.keys(this.streamStatus).length, '个流')
         }
       } catch (error) {
         console.error('❌ 更新流状态失败:', error)
@@ -903,18 +1056,58 @@ export default {
         const data = await response.json()
         
         if (data.success && data.frame) {
-          this.$set(this.streamFrames, streamId, data.frame)
+          // Vue 3 响应式更新
+          this.streamFrames[streamId] = data.frame
+          // 强制触发视图更新
+          this.$nextTick(() => {
+            this.$forceUpdate()
+          })
+          console.log(`🖼️ 更新流 ${streamId} 的帧`)
+        } else {
+          console.warn(`⚠️ 流 ${streamId} 帧获取失败:`, data.message)
         }
       } catch (error) {
-        // 静默处理帧更新错误
+        console.error(`❌ 流 ${streamId} 帧更新异常:`, error)
       }
     },
     
+    // 启动单个流
+    async startSingleStream(streamId) {
+      try {
+        console.log(`🚀 启动流 ${streamId}`)
+        const response = await fetch(`http://localhost:5000/api/rtsp/streams/${streamId}/start`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            user_id: this.$store.getters.currentUser?.id || 1
+          })
+        })
+        
+        const data = await response.json()
+        
+        if (data.success) {
+          console.log(`✅ 流 ${streamId} 启动成功`)
+          ElMessage.success(data.message)
+          await this.updateStreamsStatus()
+        } else {
+          console.error(`❌ 流 ${streamId} 启动失败:`, data.message)
+          ElMessage.error(data.message)
+        }
+      } catch (error) {
+        console.error(`❌ 启动流 ${streamId} 异常:`, error)
+        ElMessage.error(`启动流失败: ${error.message}`)
+      }
+    },
+
     // 切换流状态
     async toggleStream(stream) {
       try {
         const isRunning = this.getStreamStatus(stream.id) === 'running'
         const action = isRunning ? 'stop' : 'start'
+        
+        console.log(`🔄 ${action === 'start' ? '启动' : '停止'}流 ${stream.id} (${stream.name})`)
         
         const response = await fetch(`http://localhost:5000/api/rtsp/streams/${stream.id}/${action}`, {
           method: 'POST',
@@ -929,12 +1122,15 @@ export default {
         const data = await response.json()
         
         if (data.success) {
+          console.log(`✅ 流 ${stream.id} ${action === 'start' ? '启动' : '停止'}成功`)
           ElMessage.success(data.message)
           await this.updateStreamsStatus()
         } else {
+          console.error(`❌ 流 ${stream.id} ${action === 'start' ? '启动' : '停止'}失败:`, data.message)
           ElMessage.error(data.message)
         }
       } catch (error) {
+        console.error(`❌ 操作流 ${stream.id} 异常:`, error)
         ElMessage.error(`操作流失败: ${error.message}`)
       }
     },
@@ -1007,29 +1203,89 @@ export default {
     },
     
     // 删除流
-    async deleteStream(stream) {
+    async deleteStream(streamOrId) {
+      // 在函数开始就声明变量，确保在整个函数作用域内可用
+      let stream;
+      let streamId;
+      
       try {
-        await this.$confirm(`确定要删除流 "${stream.name}" 吗？`, '确认删除', {
-          confirmButtonText: '确定',
-          cancelButtonText: '取消',
-          type: 'warning'
+        // 兼容处理：可能传入的是stream对象或者id
+        if (typeof streamOrId === 'object' && streamOrId !== null) {
+          // 传入的是stream对象
+          stream = streamOrId;
+          streamId = stream.id;
+        } else {
+          // 传入的是id，需要查找对应的stream对象
+          streamId = streamOrId;
+          stream = this.rtspStreams.find(s => s.id === streamId);
+          if (!stream) {
+            ElMessage.error('找不到要删除的流');
+            return;
+          }
+        }
+        
+        console.log('🗑️ 准备删除流:', stream.name, '(ID:', streamId, ')');
+        
+        const result = await this.$confirm(
+          `确定要删除流 "${stream.name}" 吗？\n\n删除后将无法恢复，请谨慎操作。`, 
+          '确认删除', 
+          {
+            confirmButtonText: '确定删除',
+            cancelButtonText: '取消',
+            type: 'warning',
+            dangerouslyUseHTMLString: false,
+            distinguishCancelAndClose: true
+          }
+        )
+        
+        console.log('🚀 用户确认删除，发送请求...');
+        
+        // 添加到删除中状态
+        this.deletingStreamIds.add(streamId);
+        
+        const response = await fetch(`http://localhost:5000/api/rtsp/streams/${streamId}?user_id=${this.$store.getters.currentUser?.id || 1}`, {
+          method: 'DELETE',
+          headers: {
+            'Content-Type': 'application/json'
+          }
         })
         
-        const response = await fetch(`http://localhost:5000/api/rtsp/streams/${stream.id}?user_id=${this.$store.getters.currentUser?.id || 1}`, {
-          method: 'DELETE'
-        })
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
         
         const data = await response.json()
         
         if (data.success) {
-          ElMessage.success(data.message)
-          await this.loadRTSPStreams()
+          console.log('✅ 流删除成功');
+          ElMessage.success(data.message || '流删除成功');
+          
+          // 清理本地状态
+          delete this.streamFrames[streamId];
+          delete this.streamStatus[streamId];
+          
+          // 重新加载流列表
+          await this.loadRTSPStreams();
+          
+          // 如果删除的是当前预览的流，关闭预览
+          if (this.currentPreviewStream && this.currentPreviewStream.id === streamId) {
+            this.closeStreamPreview();
+          }
         } else {
-          ElMessage.error(data.message)
+          console.error('❌ 删除失败:', data.message);
+          ElMessage.error(data.message || '删除流失败');
         }
       } catch (error) {
-        if (error !== 'cancel') {
-          ElMessage.error(`删除流失败: ${error.message}`)
+        if (error === 'cancel') {
+          console.log('⚠️ 用户取消删除操作');
+        } else {
+          console.error('❌ 删除流异常:', error);
+          ElMessage.error(`删除流失败: ${error.message || '未知错误'}`);
+        }
+      } finally {
+        // 清理删除状态 - streamId现在在函数作用域内，一定是可用的
+        if (streamId !== undefined) {
+          this.deletingStreamIds.delete(streamId);
         }
       }
     },
@@ -1071,6 +1327,14 @@ export default {
           ElMessage.success(data.message)
           this.showAddStreamDialog = false
           await this.loadRTSPStreams()
+          
+          // 自动启动新创建的流
+          if (data.stream && data.stream.id) {
+            console.log('🚀 自动启动新创建的流:', data.stream.id)
+            setTimeout(async () => {
+              await this.startSingleStream(data.stream.id)
+            }, 1000) // 等待1秒后启动
+          }
         } else {
           ElMessage.error(data.message)
         }
@@ -1101,6 +1365,117 @@ export default {
       
       if (this.$refs.streamFormRef) {
         this.$refs.streamFormRef.clearValidate()
+      }
+    },
+    
+    // 测试RTSP连接
+    async testRTSPConnection() {
+      if (!this.streamForm.url) {
+        ElMessage.error('请先输入RTSP地址')
+        return
+      }
+      
+      this.testingConnection = true
+      
+      try {
+        const response = await fetch('http://localhost:5000/api/rtsp/test-connection', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            url: this.streamForm.url,
+            username: this.streamForm.username,
+            password: this.streamForm.password
+          })
+        })
+        
+        const data = await response.json()
+        
+        if (data.success) {
+          ElMessage.success(data.message)
+        } else {
+          ElMessage.error(data.message)
+        }
+      } catch (error) {
+        ElMessage.error(`连接测试失败: ${error.message}`)
+      } finally {
+        this.testingConnection = false
+      }
+    },
+    
+    // 打开流预览
+    openStreamPreview(stream) {
+      if (!stream) return
+      
+      console.log('🔍 打开流预览:', stream.name)
+      this.currentPreviewStream = stream
+      this.showPreviewDialog = true
+    },
+    
+    // 关闭流预览
+    closeStreamPreview() {
+      console.log('❌ 关闭流预览')
+      this.showPreviewDialog = false
+      this.currentPreviewStream = null
+    },
+    
+    // 刷新预览
+    async refreshPreview() {
+      if (!this.currentPreviewStream) return
+      
+      console.log('🔄 刷新预览:', this.currentPreviewStream.name)
+      try {
+        await this.updateStreamFrame(this.currentPreviewStream.id)
+        ElMessage.success('预览已刷新')
+      } catch (error) {
+        console.error('刷新预览失败:', error)
+        ElMessage.error('刷新预览失败')
+      }
+    },
+    
+    // 创建测试流
+    async createTestStream() {
+      try {
+        const testStream = {
+          name: `测试流-${Date.now()}`,
+          url: 'test_image.jpg', // 使用项目中的测试图片
+          user_id: this.$store.getters.currentUser?.id || 1,
+          detection_enabled: true,
+          tracking_enabled: false,
+          counting_enabled: false,
+          alert_enabled: false,
+          is_active: true,
+          model_path: 'yolov8n.pt'
+        }
+        
+        console.log('🧪 创建测试流:', testStream)
+        
+        const response = await fetch('http://localhost:5000/api/rtsp/streams', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(testStream)
+        })
+        
+        const data = await response.json()
+        
+        if (data.success) {
+          ElMessage.success('测试流创建成功！')
+          await this.loadRTSPStreams()
+          
+          // 自动启动测试流
+          if (data.stream && data.stream.id) {
+            setTimeout(async () => {
+              await this.startSingleStream(data.stream.id)
+            }, 1000)
+          }
+        } else {
+          ElMessage.error(`创建测试流失败: ${data.message}`)
+        }
+      } catch (error) {
+        ElMessage.error(`创建测试流异常: ${error.message}`)
       }
     }
   },
@@ -1288,6 +1663,40 @@ export default {
   border: 1px solid #e9ecef;
 }
 
+/* RTSP全宽模式优化 */
+.upload-card .rtsp-manager-card {
+  margin: -20px;
+  border-radius: 8px;
+  border: none;
+  box-shadow: none;
+  background: transparent;
+}
+
+.upload-card .rtsp-manager-card .el-card__header {
+  padding: 20px;
+  background: #f8f9fa;
+  border-bottom: 1px solid #e9ecef;
+}
+
+.upload-card .rtsp-manager-card .el-card__body {
+  padding: 20px;
+}
+
+/* 响应式设计 - 大屏幕优化 */
+@media (min-width: 1400px) {
+  .rtsp-grid {
+    height: 750px;
+    gap: 30px;
+  }
+}
+
+@media (min-width: 1600px) {
+  .rtsp-grid {
+    height: 800px;
+    gap: 35px;
+  }
+}
+
 .rtsp-controls {
   display: flex;
   gap: 10px;
@@ -1297,8 +1706,9 @@ export default {
   display: grid;
   grid-template-columns: 1fr 1fr;
   grid-template-rows: 1fr 1fr;
-  gap: 15px;
-  height: 500px;
+  gap: 25px;
+  height: 700px;
+  max-width: 100%;
   /* 防止ResizeObserver问题 */
   contain: layout style;
   will-change: auto;
@@ -1306,9 +1716,12 @@ export default {
 
 .rtsp-grid-item {
   border: 2px dashed #d9d9d9;
-  border-radius: 8px;
+  border-radius: 12px;
   overflow: hidden;
   position: relative;
+  min-height: 320px;
+  background: #fafafa;
+  transition: all 0.3s ease;
 }
 
 .rtsp-grid-item.has-stream {
@@ -1374,6 +1787,12 @@ export default {
   text-align: center;
 }
 
+.stream-stats {
+  margin-top: 5px;
+  color: #666;
+  font-size: 11px;
+}
+
 .empty-grid-item {
   display: flex;
   flex-direction: column;
@@ -1382,6 +1801,8 @@ export default {
   color: #999;
   cursor: pointer;
   transition: all 0.3s;
+  padding: 30px;
+  height: 100%;
 }
 
 .empty-grid-item:hover {
@@ -1392,6 +1813,152 @@ export default {
 .add-stream-icon {
   font-size: 48px;
   margin-bottom: 10px;
+}
+
+.quick-actions {
+  margin-top: 15px;
+  display: flex;
+  gap: 10px;
+  flex-direction: column;
+}
+
+/* 新的流布局样式 */
+.stream-header-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  background: linear-gradient(180deg, rgba(0,0,0,0.8) 0%, rgba(0,0,0,0.4) 70%, transparent 100%);
+  color: white;
+  padding: 8px 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  z-index: 10;
+  border-top-left-radius: 8px;
+  border-top-right-radius: 8px;
+}
+
+.stream-title-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.stream-title-info h4 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.stream-control-buttons {
+  display: flex;
+  opacity: 0.9;
+}
+
+.stream-control-buttons:hover {
+  opacity: 1;
+}
+
+.stream-video-container {
+  position: relative;
+  cursor: pointer;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.stream-video-container:hover .preview-overlay {
+  opacity: 1;
+}
+
+.preview-overlay {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: linear-gradient(0deg, rgba(0,0,0,0.8) 0%, rgba(0,0,0,0.4) 70%, transparent 100%);
+  color: white;
+  text-align: center;
+  padding: 10px;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  font-size: 12px;
+}
+
+.stream-stats-bar {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  background: rgba(0, 0, 0, 0.7);
+  color: white;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  z-index: 5;
+}
+
+.stream-container {
+  position: relative;
+  height: 100%;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+/* 预览对话框样式 */
+.preview-container {
+  display: flex;
+  flex-direction: column;
+  height: 70vh;
+}
+
+.preview-video {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #000;
+  border-radius: 8px;
+  overflow: hidden;
+  margin-bottom: 15px;
+}
+
+.preview-frame {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.preview-placeholder {
+  color: #666;
+  text-align: center;
+}
+
+.preview-icon {
+  font-size: 48px;
+  margin-bottom: 10px;
+}
+
+.preview-controls {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 15px 0;
+  border-top: 1px solid #eee;
+}
+
+.preview-info {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+}
+
+.preview-stats {
+  color: #666;
+  font-size: 14px;
 }
 
 /* 对话框样式 */

@@ -1,5 +1,4 @@
-from flask import Flask, request, jsonify, send_file
-from flask_cors import CORS
+from flask import Flask, request, jsonify, send_file, after_this_request
 from werkzeug.utils import secure_filename
 import os
 import cv2
@@ -20,7 +19,14 @@ from routes.rtsp_routes import rtsp_bp
 from services.rtsp_handler import rtsp_manager
 
 app = Flask(__name__)
-CORS(app)
+
+# 简单的CORS处理
+@app.after_request
+def after_request(response):
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+    return response
 
 # 简化的配置 - 使用SQLite数据库
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///yolo_detection.db'
@@ -34,6 +40,99 @@ db.init_app(app)
 
 # 注册蓝图
 app.register_blueprint(rtsp_bp)
+
+# RTSP连接测试API
+@app.route('/api/rtsp/test-connection', methods=['POST'])
+def test_rtsp_connection():
+    """测试RTSP连接"""
+    try:
+        data = request.get_json()
+        rtsp_url = data.get('url')
+        username = data.get('username', '')
+        password = data.get('password', '')
+        
+        if not rtsp_url:
+            return jsonify({'success': False, 'message': '请提供RTSP URL'}), 400
+        
+        # 如果有认证信息，构建完整URL
+        test_url = rtsp_url
+        if username and password and '://' in rtsp_url:
+            protocol, rest = rtsp_url.split('://', 1)
+            test_url = f"{protocol}://{username}:{password}@{rest}"
+        
+        print(f"🧪 测试RTSP连接: {rtsp_url}")
+        
+        # 尝试连接
+        import cv2
+        cap = cv2.VideoCapture(test_url, cv2.CAP_FFMPEG)
+        
+        if cap.isOpened():
+            ret, frame = cap.read()
+            cap.release()
+            
+            if ret and frame is not None:
+                h, w = frame.shape[:2]
+                return jsonify({
+                    'success': True, 
+                    'message': f'RTSP连接成功，分辨率: {w}x{h}',
+                    'resolution': {'width': w, 'height': h}
+                })
+            else:
+                return jsonify({
+                    'success': False, 
+                    'message': 'RTSP连接成功但无法读取帧'
+                })
+        else:
+            return jsonify({
+                'success': False, 
+                'message': 'RTSP连接失败：无法打开视频流'
+            })
+            
+    except Exception as e:
+        return jsonify({
+            'success': False, 
+            'message': f'测试RTSP连接时发生错误: {str(e)}'
+        }), 500
+
+@app.route('/api/rtsp/debug-info', methods=['GET'])
+def get_rtsp_debug_info():
+    """获取RTSP调试信息"""
+    try:
+        import cv2
+        debug_info = {
+            'opencv_version': cv2.__version__,
+            'ffmpeg_support': cv2.CAP_FFMPEG in [cv2.CAP_FFMPEG],
+            'available_backends': []
+        }
+        
+        # 检查可用的后端
+        backends = [
+            ('FFmpeg', cv2.CAP_FFMPEG),
+            ('GStreamer', cv2.CAP_GSTREAMER),
+            ('DirectShow', cv2.CAP_DSHOW),
+            ('V4L2', cv2.CAP_V4L2)
+        ]
+        
+        for name, backend in backends:
+            try:
+                # 创建一个空的VideoCapture来测试后端
+                test_cap = cv2.VideoCapture(0, backend)
+                if test_cap.isOpened():
+                    debug_info['available_backends'].append(name)
+                test_cap.release()
+            except:
+                pass
+        
+        return jsonify({
+            'success': True,
+            'debug_info': debug_info
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': f'获取调试信息失败: {str(e)}'
+        }), 500
 
 # 确保上传目录存在
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
