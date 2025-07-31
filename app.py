@@ -45,8 +45,17 @@ CORS(app)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///yolo_detection.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['UPLOAD_FOLDER'] = 'uploads'
-app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB max file size
+app.config['MAX_CONTENT_LENGTH'] = 1024 * 1024 * 1024  # 1GB max file size
 app.config['SECRET_KEY'] = 'yolo-detection-secret-key-2024'
+
+# 处理文件过大错误
+@app.errorhandler(413)
+def too_large(e):
+    return jsonify({
+        'success': False,
+        'message': '上传文件过大，请选择小于1GB的文件',
+        'error': 'FILE_TOO_LARGE'
+    }), 413
 
 db = SQLAlchemy(app)
 

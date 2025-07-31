@@ -81,7 +81,7 @@
                 <el-icon class="upload-icon"><Plus /></el-icon>
                 <div class="upload-text">
                   <p>拖拽图片到此处，或<em>点击上传</em></p>
-                  <p class="upload-tip">支持 JPG、PNG、GIF 格式，大小不超过 10MB</p>
+                  <p class="upload-tip">支持 JPG、PNG、GIF 格式，大小不超过 100MB</p>
                   <p v-if="detectionMode === 'image_seg'" class="upload-tip seg-tip">
                     🎭 分割模式：将显示详细的目标轮廓和彩色掩码
                   </p>
@@ -105,7 +105,7 @@
                 <el-icon class="upload-icon"><VideoPlay /></el-icon>
                 <div class="upload-text">
                   <p>拖拽视频到此处，或<em>点击上传</em></p>
-                  <p class="upload-tip">支持 MP4、AVI、MOV 格式，大小不超过 100MB</p>
+                  <p class="upload-tip">支持 MP4、AVI、MOV 格式，大小不超过 1GB</p>
                   <p v-if="detectionMode === 'video_seg'" class="upload-tip seg-tip">
                     🎭 分割模式：将在视频中显示彩色分割掩码
                   </p>
@@ -946,19 +946,22 @@ export default {
     // 图片上传相关
     beforeImageUpload(file) {
       const isImage = file.type.startsWith('image/')
-      const isLt10M = file.size / 1024 / 1024 < 10
+      const isLt100M = file.size / 1024 / 1024 < 100
       
       if (!isImage) {
         ElMessage.error('只能上传图片文件!')
         return false
       }
-      if (!isLt10M) {
-        ElMessage.error('图片大小不能超过 10MB!')
+      if (!isLt100M) {
+        const fileSizeMB = (file.size / 1024 / 1024).toFixed(2);
+        ElMessage.error(`图片大小不能超过 100MB! 当前文件大小: ${fileSizeMB}MB`)
         return false
       }
       
       // 保存图片URL用于预览
       this.imageUrl = URL.createObjectURL(file)
+      const fileSizeMB = (file.size / 1024 / 1024).toFixed(2);
+      ElMessage.success(`图片上传成功 (${fileSizeMB}MB)`)
       return true
     },
     
@@ -990,10 +993,20 @@ export default {
     },
     
     handleVideoChange(uploadFile) {
+      // 检查文件大小 (1GB = 1024 * 1024 * 1024 bytes)
+      const maxSize = 1024 * 1024 * 1024; // 1GB
+      if (uploadFile.raw.size > maxSize) {
+        const fileSizeGB = (uploadFile.raw.size / 1024 / 1024 / 1024).toFixed(2);
+        ElMessage.error(`文件过大，请选择小于1GB的视频文件。当前文件大小: ${fileSizeGB}GB`);
+        return false;
+      }
+      
       // 只保存视频文件用于预览，不立即检测
       this.videoUrl = URL.createObjectURL(uploadFile.raw)
       this.videoFile = uploadFile.raw
-      ElMessage.success('视频上传成功，请点击"开始检测"进行分析')
+      
+      const fileSizeMB = (uploadFile.raw.size / 1024 / 1024).toFixed(2);
+      ElMessage.success(`视频上传成功 (${fileSizeMB}MB)，请点击"开始检测"进行分析`)
     },
     
     handleVideoSuccess(response) {
@@ -1306,6 +1319,11 @@ export default {
           body: formData
         })
         
+        // 检查HTTP状态码
+        if (response.status === 413) {
+          throw new Error('FILE_TOO_LARGE')
+        }
+        
         const data = await response.json()
         
         if (data.success) {
@@ -1315,7 +1333,17 @@ export default {
         }
       } catch (error) {
         console.error('视频处理失败:', error)
-        ElMessage.error('视频处理失败: ' + error.message)
+        
+        // 特殊处理不同类型的错误
+        if (error.message === 'FILE_TOO_LARGE' || error.message.includes('413')) {
+          ElMessage.error('文件过大，请选择小于1GB的视频文件')
+        } else if (error.message.includes('Unexpected token') || error.message.includes('JSON')) {
+          ElMessage.error('文件上传失败，可能是文件过大或服务器忙碌，请重试')
+        } else if (error.message.includes('Failed to fetch')) {
+          ElMessage.error('网络连接失败，请检查网络或稍后重试')
+        } else {
+          ElMessage.error('视频处理失败: ' + error.message)
+        }
       } finally {
         this.$store.commit('SET_LOADING', false)
       }

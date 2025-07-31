@@ -47,7 +47,7 @@
                 <el-icon class="upload-icon"><Plus /></el-icon>
                 <div class="upload-text">
                   <p>拖拽图片到此处，或<em>点击上传</em></p>
-                  <p class="upload-tip">支持 JPG、PNG、GIF 格式，大小不超过 10MB</p>
+                  <p class="upload-tip">支持 JPG、PNG、GIF 格式，大小不超过 100MB</p>
                 </div>
               </div>
               <img v-else :src="imageUrl" class="uploaded-image" alt="上传的图片">
@@ -68,7 +68,7 @@
                 <el-icon class="upload-icon"><VideoPlay /></el-icon>
                 <div class="upload-text">
                   <p>拖拽视频到此处，或<em>点击上传</em></p>
-                  <p class="upload-tip">支持 MP4、AVI、MOV 格式，大小不超过 100MB</p>
+                  <p class="upload-tip">支持 MP4、AVI、MOV 格式，大小不超过 1GB</p>
                 </div>
               </div>
               <video v-else :src="videoUrl" class="uploaded-video" controls>
@@ -565,32 +565,36 @@ export default {
     // 图片上传相关
     beforeImageUpload(file) {
       const isImage = file.type.startsWith('image/')
-      const isLt10M = file.size / 1024 / 1024 < 10
+      const isLt100M = file.size / 1024 / 1024 < 100
       
       if (!isImage) {
         ElMessage.error('只能上传图片文件!')
         return false
       }
-      if (!isLt10M) {
-        ElMessage.error('图片大小不能超过 10MB!')
+      if (!isLt100M) {
+        const fileSizeMB = (file.size / 1024 / 1024).toFixed(2);
+        ElMessage.error(`图片大小不能超过 100MB! 当前文件大小: ${fileSizeMB}MB`)
         return false
       }
       
       this.imageUrl = URL.createObjectURL(file)
+      const fileSizeMB = (file.size / 1024 / 1024).toFixed(2);
+      ElMessage.success(`图片上传成功 (${fileSizeMB}MB)`)
       return true
     },
     
     // 视频上传相关
     beforeVideoUpload(file) {
       const isVideo = file.type.startsWith('video/')
-      const isLt100M = file.size / 1024 / 1024 < 100
+      const isLt1G = file.size / 1024 / 1024 / 1024 < 1
       
       if (!isVideo) {
         ElMessage.error('只能上传视频文件!')
         return false
       }
-      if (!isLt100M) {
-        ElMessage.error('视频大小不能超过 100MB!')
+      if (!isLt1G) {
+        const fileSizeGB = (file.size / 1024 / 1024 / 1024).toFixed(2);
+        ElMessage.error(`视频大小不能超过 1GB! 当前文件大小: ${fileSizeGB}GB`)
         return false
       }
       
@@ -598,9 +602,19 @@ export default {
     },
     
     handleVideoChange(uploadFile) {
+      // 检查文件大小
+      const maxSize = 1024 * 1024 * 1024; // 1GB
+      if (uploadFile.raw.size > maxSize) {
+        const fileSizeGB = (uploadFile.raw.size / 1024 / 1024 / 1024).toFixed(2);
+        ElMessage.error(`文件过大，请选择小于1GB的视频文件。当前文件大小: ${fileSizeGB}GB`);
+        return false;
+      }
+      
       this.videoUrl = URL.createObjectURL(uploadFile.raw)
       this.videoFile = uploadFile.raw
-      ElMessage.success('视频上传成功，请点击"开始去除水印"进行处理')
+      
+      const fileSizeMB = (uploadFile.raw.size / 1024 / 1024).toFixed(2);
+      ElMessage.success(`视频上传成功 (${fileSizeMB}MB)，请点击"开始去除水印"进行处理`)
     },
     
     handleUploadSuccess(response) {
