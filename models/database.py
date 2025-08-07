@@ -42,6 +42,20 @@ class AlertRecord(db.Model):
     is_handled = db.Column(db.Boolean, default=False)  # 是否已处理
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
+class ModelPollingConfig(db.Model):
+    """模型轮询配置表"""
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)  # 轮询配置名称
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    is_active = db.Column(db.Boolean, default=True)  # 是否启用
+    polling_type = db.Column(db.String(20), default='frame')  # 轮询类型：'frame'(按帧), 'time'(按时间)
+    interval_value = db.Column(db.Integer, default=10)  # 间隔值（帧数或秒数）
+    model_paths = db.Column(db.Text, nullable=False)  # JSON格式的模型路径列表，按顺序轮询
+    model_order = db.Column(db.Text)  # JSON格式的模型轮询顺序索引
+    description = db.Column(db.Text)  # 配置描述
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
 class RTSPStream(db.Model):
     """RTSP流配置表"""
     id = db.Column(db.Integer, primary_key=True)
@@ -58,5 +72,17 @@ class RTSPStream(db.Model):
     alert_enabled = db.Column(db.Boolean, default=False)  # 是否启用预警
     position_x = db.Column(db.Integer, default=0)  # 在四宫格中的X位置
     position_y = db.Column(db.Integer, default=0)  # 在四宫格中的Y位置
+    
+    # 新增模型轮询相关字段
+    polling_enabled = db.Column(db.Boolean, default=False)  # 是否启用模型轮询
+    polling_config_id = db.Column(db.Integer, db.ForeignKey('model_polling_config.id'), nullable=True)  # 关联的轮询配置
+    polling_type = db.Column(db.String(20), default='frame')  # 轮询类型：'frame'(按帧), 'time'(按时间)
+    polling_interval = db.Column(db.Integer, default=10)  # 轮询间隔（帧数或秒数）
+    polling_models = db.Column(db.Text)  # JSON格式的轮询模型路径列表
+    polling_order = db.Column(db.Text)  # JSON格式的模型轮询顺序
+    
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow) 
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # 关联关系
+    polling_config = db.relationship('ModelPollingConfig', backref='rtsp_streams') 

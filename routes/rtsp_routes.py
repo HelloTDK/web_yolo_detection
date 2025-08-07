@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify
 import json
-from models.database import db, RTSPStream
+from models.database import db, RTSPStream, ModelPollingConfig
 from services.rtsp_handler import rtsp_manager
 
 rtsp_bp = Blueprint('rtsp', __name__, url_prefix='/api/rtsp')
@@ -37,8 +37,24 @@ def get_streams():
                 'position_x': stream.position_x,
                 'position_y': stream.position_y,
                 'created_at': stream.created_at.isoformat(),
-                'status': status
+                'status': status,
+                # 新增轮询相关字段
+                'polling_enabled': stream.polling_enabled,
+                'polling_config_id': stream.polling_config_id,
+                'polling_type': stream.polling_type,
+                'polling_interval': stream.polling_interval,
+                'polling_models': json.loads(stream.polling_models) if stream.polling_models else [],
+                'polling_order': json.loads(stream.polling_order) if stream.polling_order else []
             }
+            
+            # 如果有关联的轮询配置，添加配置信息
+            if stream.polling_config:
+                stream_data['polling_config'] = {
+                    'id': stream.polling_config.id,
+                    'name': stream.polling_config.name,
+                    'is_active': stream.polling_config.is_active
+                }
+            
             stream_list.append(stream_data)
         
         return jsonify({
@@ -79,6 +95,32 @@ def create_stream():
         existing_streams = RTSPStream.query.filter_by(user_id=user_id, is_active=True).all()
         position_x, position_y = _find_available_position(existing_streams)
         
+        # 处理轮询配置
+        polling_enabled = data.get('polling_enabled', False)
+        polling_config_id = data.get('polling_config_id')
+        
+        # 如果启用轮询且指定了配置ID，验证配置是否存在
+        if polling_enabled and polling_config_id:
+            polling_config = ModelPollingConfig.query.filter_by(
+                id=polling_config_id, user_id=user_id, is_active=True
+            ).first()
+            if not polling_config:
+                return jsonify({'success': False, 'message': '指定的轮询配置不存在或不可用'}), 400
+            
+            # 从配置中获取轮询参数
+            polling_type = polling_config.polling_type
+            polling_interval = polling_config.interval_value
+            # 确保数据类型一致，都转换为JSON字符串
+            polling_models = json.dumps(polling_config.model_paths) if isinstance(polling_config.model_paths, list) else polling_config.model_paths
+            polling_order = json.dumps(polling_config.model_order) if isinstance(polling_config.model_order, list) else polling_config.model_order
+        else:
+            # 使用自定义轮询参数
+            polling_config_id = None
+            polling_type = data.get('polling_type', 'frame')
+            polling_interval = data.get('polling_interval', 10)
+            polling_models = json.dumps(data.get('polling_models', []))
+            polling_order = json.dumps(data.get('polling_order', []))
+        
         # 创建流记录
         stream = RTSPStream(
             user_id=user_id,
@@ -93,7 +135,14 @@ def create_stream():
             counting_enabled=data.get('counting_enabled', False),
             alert_enabled=data.get('alert_enabled', False),
             position_x=position_x,
-            position_y=position_y
+            position_y=position_y,
+            # 轮询相关字段
+            polling_enabled=polling_enabled,
+            polling_config_id=polling_config_id,
+            polling_type=polling_type,
+            polling_interval=polling_interval,
+            polling_models=polling_models,
+            polling_order=polling_order
         )
         
         db.session.add(stream)
@@ -110,7 +159,13 @@ def create_stream():
             'model_path': stream.model_path,
             'tracking_enabled': stream.tracking_enabled,
             'counting_enabled': stream.counting_enabled,
-            'alert_enabled': stream.alert_enabled
+            'alert_enabled': stream.alert_enabled,
+            # 轮询配置
+            'polling_enabled': stream.polling_enabled,
+            'polling_type': stream.polling_type,
+            'polling_interval': stream.polling_interval,
+            'polling_models': stream.polling_models,
+            'polling_order': stream.polling_order
         }
         
         if rtsp_manager.add_stream(stream_config):
@@ -121,7 +176,8 @@ def create_stream():
                     'id': stream.id,
                     'name': stream.name,
                     'position_x': stream.position_x,
-                    'position_y': stream.position_y
+                    'position_y': stream.position_y,
+                    'polling_enabled': stream.polling_enabled
                 }
             })
         else:
@@ -160,6 +216,41 @@ def update_stream(stream_id):
             if field in data:
                 setattr(stream, field, data[field])
         
+        # 处理轮询配置更新
+        if 'polling_enabled' in data:
+            stream.polling_enabled = data['polling_enabled']
+            
+            if stream.polling_enabled:
+                # 如果启用轮询，更新相关配置
+                if 'polling_config_id' in data and data['polling_config_id']:
+                    # 使用预设配置
+                    polling_config = ModelPollingConfig.query.filter_by(
+                        id=data['polling_config_id'], user_id=user_id, is_active=True
+                    ).first()
+                    if not polling_config:
+                        return jsonify({'success': False, 'message': '指定的轮询配置不存在或不可用'}), 400
+                    
+                    stream.polling_config_id = polling_config.id
+                    stream.polling_type = polling_config.polling_type
+                    stream.polling_interval = polling_config.interval_value
+                    # 确保数据类型一致，都转换为JSON字符串
+                    stream.polling_models = json.dumps(polling_config.model_paths) if isinstance(polling_config.model_paths, list) else polling_config.model_paths
+                    stream.polling_order = json.dumps(polling_config.model_order) if isinstance(polling_config.model_order, list) else polling_config.model_order
+                else:
+                    # 使用自定义配置
+                    stream.polling_config_id = None
+                    if 'polling_type' in data:
+                        stream.polling_type = data['polling_type']
+                    if 'polling_interval' in data:
+                        stream.polling_interval = data['polling_interval']
+                    if 'polling_models' in data:
+                        stream.polling_models = json.dumps(data['polling_models'])
+                    if 'polling_order' in data:
+                        stream.polling_order = json.dumps(data['polling_order'])
+            else:
+                # 禁用轮询
+                stream.polling_config_id = None
+        
         db.session.commit()
         
         # 更新RTSP管理器配置
@@ -173,7 +264,12 @@ def update_stream(stream_id):
             'model_path': stream.model_path,
             'tracking_enabled': stream.tracking_enabled,
             'counting_enabled': stream.counting_enabled,
-            'alert_enabled': stream.alert_enabled
+            'alert_enabled': stream.alert_enabled,
+            'polling_enabled': stream.polling_enabled,
+            'polling_type': stream.polling_type,
+            'polling_interval': stream.polling_interval,
+            'polling_models': stream.polling_models,
+            'polling_order': stream.polling_order
         }
         
         rtsp_manager.update_stream_config(stream_id, stream_config)
@@ -350,6 +446,117 @@ def reset_stream_tracker(stream_id):
         
     except Exception as e:
         return jsonify({'success': False, 'message': f'重置跟踪器失败: {str(e)}'}), 500
+
+# 新增轮询相关API
+@rtsp_bp.route('/streams/<int:stream_id>/polling/status', methods=['GET'])
+def get_stream_polling_status(stream_id):
+    """获取RTSP流的轮询状态"""
+    try:
+        from services.model_polling import polling_manager
+        
+        user_id = request.args.get('user_id', 1, type=int)
+        
+        stream = RTSPStream.query.filter_by(id=stream_id, user_id=user_id).first()
+        if not stream:
+            return jsonify({'success': False, 'message': '流不存在'}), 404
+        
+        if not stream.polling_enabled:
+            return jsonify({
+                'success': True,
+                'polling_enabled': False,
+                'message': '该流未启用模型轮询'
+            })
+        
+        # 获取轮询状态
+        polling_info = polling_manager.get_polling_info(stream_id)
+        
+        return jsonify({
+            'success': True,
+            'polling_enabled': True,
+            'polling_info': polling_info,
+            'stream_config': {
+                'polling_type': stream.polling_type,
+                'polling_interval': stream.polling_interval,
+                'models': json.loads(stream.polling_models) if stream.polling_models else [],
+                'order': json.loads(stream.polling_order) if stream.polling_order else []
+            }
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'message': f'获取轮询状态失败: {str(e)}'}), 500
+
+@rtsp_bp.route('/streams/<int:stream_id>/polling/reset', methods=['POST'])
+def reset_stream_polling(stream_id):
+    """重置RTSP流的轮询状态"""
+    try:
+        from services.model_polling import polling_manager
+        
+        user_id = request.get_json().get('user_id', 1)
+        
+        stream = RTSPStream.query.filter_by(id=stream_id, user_id=user_id).first()
+        if not stream:
+            return jsonify({'success': False, 'message': '流不存在'}), 404
+        
+        if not stream.polling_enabled:
+            return jsonify({'success': False, 'message': '该流未启用模型轮询'}), 400
+        
+        polling_manager.reset_polling(stream_id)
+        
+        return jsonify({
+            'success': True,
+            'message': f'流 {stream.name} 的轮询状态已重置'
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'message': f'重置轮询状态失败: {str(e)}'}), 500
+
+@rtsp_bp.route('/streams/<int:stream_id>/polling/update', methods=['POST'])
+def update_stream_polling_config(stream_id):
+    """更新RTSP流的轮询配置"""
+    try:
+        data = request.get_json()
+        user_id = data.get('user_id', 1)
+        
+        stream = RTSPStream.query.filter_by(id=stream_id, user_id=user_id).first()
+        if not stream:
+            return jsonify({'success': False, 'message': '流不存在'}), 404
+        
+        # 更新数据库中的轮询配置
+        if 'polling_enabled' in data:
+            stream.polling_enabled = data['polling_enabled']
+        
+        if stream.polling_enabled:
+            if 'polling_type' in data:
+                stream.polling_type = data['polling_type']
+            if 'polling_interval' in data:
+                stream.polling_interval = data['polling_interval']
+            if 'polling_models' in data:
+                stream.polling_models = json.dumps(data['polling_models'])
+            if 'polling_order' in data:
+                stream.polling_order = json.dumps(data['polling_order'])
+        
+        db.session.commit()
+        
+        # 更新RTSP处理器的轮询配置
+        if stream_id in rtsp_manager.handlers:
+            handler = rtsp_manager.handlers[stream_id]
+            polling_config = {
+                'enabled': stream.polling_enabled,
+                'type': stream.polling_type,
+                'interval': stream.polling_interval,
+                'models': json.loads(stream.polling_models) if stream.polling_models else [],
+                'order': json.loads(stream.polling_order) if stream.polling_order else []
+            }
+            handler.update_polling_config(polling_config)
+        
+        return jsonify({
+            'success': True,
+            'message': f'流 {stream.name} 的轮询配置已更新'
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': f'更新轮询配置失败: {str(e)}'}), 500
 
 @rtsp_bp.route('/status', methods=['GET'])
 def get_all_status():

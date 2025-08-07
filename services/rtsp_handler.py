@@ -12,6 +12,9 @@ import io
 from PIL import Image
 import os
 
+# 导入模型轮询管理器
+from .model_polling import polling_manager
+
 class ObjectTracker:
     """目标跟踪器（每个RTSP流独立的跟踪器）"""
     def __init__(self):
@@ -256,6 +259,7 @@ class RTSPStreamHandler:
         self.latest_tracking_results = []
         self.latest_counts = {}
         self.latest_alerts = []
+        self.latest_segmentation_results = None  # 新增：保存分割结果
         self.frame_count = 0
         self.fps = 0
         self.last_fps_time = time.time()
@@ -266,8 +270,46 @@ class RTSPStreamHandler:
         self.max_reconnect_attempts = 5
         self.reconnect_delay = 5
         
+        # 模型轮询相关
+        self.polling_enabled = stream_config.get('polling_enabled', False)
+        self.stream_id = stream_config.get('id')
+        self.current_model_info = {}
+        
+        # 初始化模型轮询
+        self._init_model_polling()
+        
+    def _init_model_polling(self):
+        """初始化模型轮询"""
+        if self.polling_enabled and self.stream_id:
+            try:
+                # 从配置中获取轮询参数
+                polling_config = {
+                    'type': self.stream_config.get('polling_type', 'frame'),
+                    'interval': self.stream_config.get('polling_interval', 10),
+                    'models': json.loads(self.stream_config.get('polling_models', '[]')),
+                    'order': json.loads(self.stream_config.get('polling_order', '[]'))
+                }
+                
+                if polling_config['models']:
+                    success = polling_manager.create_polling(self.stream_id, polling_config)
+                    if success:
+                        print(f"✅ 流 {self.stream_id} 模型轮询初始化成功")
+                    else:
+                        print(f"❌ 流 {self.stream_id} 模型轮询初始化失败")
+                        self.polling_enabled = False
+                else:
+                    print(f"⚠️ 流 {self.stream_id} 没有配置轮询模型列表")
+                    self.polling_enabled = False
+            except Exception as e:
+                print(f"❌ 流 {self.stream_id} 模型轮询初始化异常: {e}")
+                self.polling_enabled = False
+
     def load_model(self, model_path):
-        """加载YOLO模型"""
+        """加载YOLO模型（单模型模式）"""
+        if self.polling_enabled:
+            print(f"⚠️ 流 {self.stream_id} 已启用模型轮询，忽略单模型加载")
+            return True
+            
         try:
             self.model = YOLO(model_path)
             print(f"✅ RTSP流 {self.stream_config['name']} 模型加载成功: {model_path}")
@@ -281,8 +323,8 @@ class RTSPStreamHandler:
         if self.is_running:
             return False
         
-        if not self.model:
-            print(f"❌ RTSP流 {self.stream_config['name']} 未加载模型")
+        if not self.polling_enabled and not self.model:
+            print(f"❌ RTSP流 {self.stream_config['name']} 未加载模型且未启用轮询")
             return False
         
         self.is_running = True
@@ -507,14 +549,31 @@ class RTSPStreamHandler:
     def _detect_frame(self, frame):
         """检测单帧"""
         try:
-            if not self.model:
-                return
+            # 获取当前应该使用的模型
+            current_model = None
+            if self.polling_enabled and self.stream_id:
+                current_model = polling_manager.get_model_for_stream(self.stream_id)
+                self.current_model_info = polling_manager.get_polling_info(self.stream_id)
+                if current_model is None:
+                    print(f"⚠️ 流 {self.stream_id} 轮询模型获取失败")
+                    return
+            else:
+                current_model = self.model
+                if current_model is None:
+                    return
             
-            # YOLO检测
-            results = self.model(frame)
+            # 检查是否为分割模型
+            model_path = getattr(current_model, 'ckpt_path', '') or str(current_model)
+            is_segmentation_model = 'seg' in model_path.lower()
+            
+            # YOLO检测/分割
+            results = current_model(frame)
             
             detections = []
+            segmentation_result = None
+            
             for r in results:
+                # 处理检测框
                 boxes = r.boxes
                 if boxes is not None:
                     for box in boxes:
@@ -524,12 +583,37 @@ class RTSPStreamHandler:
                         
                         if conf > 0.3:
                             detections.append({
-                                'class': self.model.names[int(cls)],
+                                'class': current_model.names[int(cls)],
                                 'confidence': float(conf),
                                 'bbox': [float(x1), float(y1), float(x2), float(y2)]
                             })
+                
+                # 如果是分割模型，处理掩码
+                if is_segmentation_model and hasattr(r, 'masks') and r.masks is not None:
+                    masks = r.masks
+                    if len(masks) > 0:
+                        # 构建分割结果格式
+                        segmentation_result = {
+                            'boxes': [],
+                            'masks': [],
+                            'confidences': [],
+                            'classes': [],
+                            'class_names': []
+                        }
+                        
+                        # 提取分割数据
+                        if boxes is not None and len(boxes) > 0:
+                            segmentation_result['boxes'] = boxes.xyxy.cpu().numpy().tolist()
+                            segmentation_result['confidences'] = boxes.conf.cpu().numpy().tolist()
+                            segmentation_result['classes'] = boxes.cls.cpu().numpy().tolist()
+                            segmentation_result['class_names'] = [current_model.names[int(cls)] for cls in segmentation_result['classes']]
+                        
+                        # 提取掩码数据
+                        masks_data = masks.data.cpu().numpy()
+                        segmentation_result['masks'] = masks_data
             
             self.latest_detections = detections
+            self.latest_segmentation_results = segmentation_result
             
             # 如果启用跟踪
             if self.stream_config.get('tracking_enabled', False):
@@ -547,13 +631,15 @@ class RTSPStreamHandler:
                 if self.stream_config.get('alert_enabled', False):
                     new_targets = self.tracker.get_new_targets()
                     if new_targets:
-                        self.latest_alerts.extend(new_targets)
-                        self._save_alert_frames(frame, new_targets)
-                        if len(self.latest_alerts) > 50:
-                            self.latest_alerts = self.latest_alerts[-50:]
+                        self.latest_alerts = new_targets
+                        print(f"🚨 流 {self.stream_config['name']} 新目标预警: {len(new_targets)} 个")
+                    else:
+                        self.latest_alerts = []
             
         except Exception as e:
-            print(f"❌ RTSP流 {self.stream_config['name']} 检测失败: {e}")
+            print(f"❌ 检测帧失败: {e}")
+            self.latest_detections = []
+            self.latest_segmentation_results = None
     
     def _save_alert_frames(self, frame, new_targets):
         """保存预警帧"""
@@ -605,7 +691,7 @@ class RTSPStreamHandler:
             self.is_running = False
     
     def get_latest_frame_base64(self):
-        """获取最新帧的base64编码（包含检测结果可视化）"""
+        """获取最新帧的base64编码，包含检测结果"""
         if self.latest_frame is None:
             return None
         
@@ -613,8 +699,15 @@ class RTSPStreamHandler:
             # 复制原始帧用于绘制
             frame_with_detections = self.latest_frame.copy()
             
-            # 绘制检测结果
-            if self.latest_detections and self.stream_config.get('detection_enabled', True):
+            # 如果有分割结果，优先使用分割可视化
+            if (self.latest_segmentation_results and 
+                self.stream_config.get('detection_enabled', True)):
+                frame_with_detections = self._draw_segmentation_results(
+                    frame_with_detections, self.latest_segmentation_results
+                )
+            # 否则使用普通检测框
+            elif (self.latest_detections and 
+                  self.stream_config.get('detection_enabled', True)):
                 frame_with_detections = self._draw_detections(frame_with_detections, self.latest_detections)
             
             # 绘制跟踪结果
@@ -624,6 +717,10 @@ class RTSPStreamHandler:
             # 绘制计数信息
             if self.latest_counts and self.stream_config.get('counting_enabled', False):
                 frame_with_detections = self._draw_count_info(frame_with_detections, self.latest_counts)
+            
+            # 绘制模型轮询信息
+            if self.polling_enabled and self.current_model_info:
+                frame_with_detections = self._draw_polling_info(frame_with_detections, self.current_model_info)
             
             # 编码为JPEG
             _, buffer = cv2.imencode('.jpg', frame_with_detections, [cv2.IMWRITE_JPEG_QUALITY, 70])
@@ -705,9 +802,105 @@ class RTSPStreamHandler:
         
         return frame
     
+    def _draw_polling_info(self, frame, polling_info):
+        """在帧上绘制模型轮询信息"""
+        if not polling_info:
+            return frame
+            
+        height, width = frame.shape[:2]
+        
+        # 构建轮询信息文本
+        model_name = os.path.basename(polling_info.get('current_model_path', ''))
+        model_index = polling_info.get('current_model_index', 0) + 1
+        total_models = polling_info.get('total_models', 1)
+        polling_type = polling_info.get('polling_type', 'frame')
+        
+        polling_text = f"Model {model_index}/{total_models}: {model_name}"
+        
+        if polling_type == 'frame':
+            frame_counter = polling_info.get('frame_counter', 0)
+            interval = polling_info.get('interval', 10)
+            polling_text += f" ({frame_counter}/{interval})"
+        else:  # time
+            time_since = polling_info.get('time_since_last_switch', 0)
+            interval = polling_info.get('interval', 10)
+            polling_text += f" ({time_since:.1f}s/{interval}s)"
+        
+        # 计算文本位置（右上角）
+        text_size = cv2.getTextSize(polling_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)[0]
+        x_pos = width - text_size[0] - 10
+        y_pos = 30
+        
+        # 绘制背景
+        cv2.rectangle(frame, (x_pos - 5, y_pos - text_size[1] - 5),
+                     (x_pos + text_size[0] + 5, y_pos + 5), (255, 165, 0), -1)
+        
+        # 绘制文字
+        cv2.putText(frame, polling_text, (x_pos, y_pos),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        
+        return frame
+    
+    def _draw_segmentation_results(self, frame, segmentation_results):
+        """在帧上绘制分割结果（包含掩码和检测框）"""
+        try:
+            # 导入分割处理器用于可视化
+            from yolo_seg_handler import YOLOSegmentationHandler
+            
+            # 创建临时的分割处理器用于可视化
+            temp_handler = YOLOSegmentationHandler()
+            
+            # 使用分割处理器的可视化方法
+            frame_with_seg = temp_handler.visualize_segmentation(
+                frame, segmentation_results,
+                show_boxes=True,
+                show_masks=True,
+                show_labels=True,
+                mask_alpha=0.4
+            )
+            
+            return frame_with_seg
+            
+        except Exception as e:
+            print(f"❌ 绘制分割结果失败: {e}")
+            # 如果分割可视化失败，回退到普通检测框
+            return self._draw_detections_from_segmentation(frame, segmentation_results)
+    
+    def _draw_detections_from_segmentation(self, frame, segmentation_results):
+        """从分割结果中提取检测框并绘制"""
+        try:
+            boxes = segmentation_results.get('boxes', [])
+            confidences = segmentation_results.get('confidences', [])
+            class_names = segmentation_results.get('class_names', [])
+            
+            for i, (box, conf, class_name) in enumerate(zip(boxes, confidences, class_names)):
+                if conf > 0.3:
+                    x1, y1, x2, y2 = box
+                    
+                    # 绘制边界框（分割模型用橙色区分）
+                    cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 165, 255), 2)
+                    
+                    # 绘制标签
+                    label = f"{class_name}: {conf:.2f}"
+                    label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)[0]
+                    
+                    # 绘制标签背景
+                    cv2.rectangle(frame, (int(x1), int(y1) - label_size[1] - 10),
+                                 (int(x1) + label_size[0], int(y1)), (0, 165, 255), -1)
+                    
+                    # 绘制标签文字
+                    cv2.putText(frame, label, (int(x1), int(y1) - 5),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+            
+            return frame
+            
+        except Exception as e:
+            print(f"❌ 从分割结果绘制检测框失败: {e}")
+            return frame
+    
     def get_status(self):
         """获取流状态"""
-        return {
+        status = {
             'is_running': self.is_running,
             'frame_count': self.frame_count,
             'fps': self.fps,
@@ -716,15 +909,30 @@ class RTSPStreamHandler:
             'tracking_count': len(self.latest_tracking_results),
             'alert_count': len(self.latest_alerts)
         }
+        
+        # 添加轮询信息
+        if self.polling_enabled:
+            status['polling_enabled'] = True
+            status['polling_info'] = self.current_model_info
+        else:
+            status['polling_enabled'] = False
+            
+        return status
     
     def get_detection_results(self):
         """获取最新的检测结果"""
-        return {
+        results = {
             'detections': self.latest_detections.copy(),
             'tracking_results': self.latest_tracking_results.copy() if self.stream_config.get('tracking_enabled', False) else [],
             'counts': self.latest_counts.copy() if self.stream_config.get('counting_enabled', False) else {},
             'alerts': self.latest_alerts.copy() if self.stream_config.get('alert_enabled', False) else []
         }
+        
+        # 添加轮询信息
+        if self.polling_enabled:
+            results['polling_info'] = self.current_model_info
+            
+        return results
     
     def reset_tracker(self):
         """重置跟踪器"""
@@ -732,6 +940,35 @@ class RTSPStreamHandler:
         self.latest_tracking_results = []
         self.latest_counts = {}
         self.latest_alerts = []
+    
+    def update_polling_config(self, polling_config):
+        """更新模型轮询配置"""
+        try:
+            self.polling_enabled = polling_config.get('enabled', False)
+            
+            if self.polling_enabled and self.stream_id:
+                config = {
+                    'type': polling_config.get('type', 'frame'),
+                    'interval': polling_config.get('interval', 10),
+                    'models': polling_config.get('models', []),
+                    'order': polling_config.get('order', [])
+                }
+                
+                success = polling_manager.update_polling_config(self.stream_id, config)
+                if success:
+                    print(f"✅ 流 {self.stream_id} 模型轮询配置更新成功")
+                else:
+                    print(f"❌ 流 {self.stream_id} 模型轮询配置更新失败")
+                    self.polling_enabled = False
+            else:
+                # 禁用轮询
+                if self.stream_id:
+                    polling_manager.remove_polling(self.stream_id)
+                print(f"✅ 流 {self.stream_id} 模型轮询已禁用")
+                
+        except Exception as e:
+            print(f"❌ 更新流 {self.stream_id} 轮询配置异常: {e}")
+            self.polling_enabled = False
 
 
 class RTSPManager:
@@ -750,19 +987,20 @@ class RTSPManager:
         
         handler = RTSPStreamHandler(stream_config)
         
-        # 加载模型
-        model_path = stream_config.get('model_path', 'yolov8n.pt')
-        if model_path not in self.models:
-            try:
-                self.models[model_path] = YOLO(model_path)
-                print(f"✅ 加载模型: {model_path}")
-            except Exception as e:
-                print(f"❌ 加载模型失败: {model_path}, {e}")
-                return False
+        # 如果没有启用轮询，使用传统的单模型加载方式
+        if not stream_config.get('polling_enabled', False):
+            model_path = stream_config.get('model_path', 'yolov8n.pt')
+            if model_path not in self.models:
+                try:
+                    self.models[model_path] = YOLO(model_path)
+                    print(f"✅ 加载模型: {model_path}")
+                except Exception as e:
+                    print(f"❌ 加载模型失败: {model_path}, {e}")
+                    return False
+            
+            handler.model = self.models[model_path]
         
-        handler.model = self.models[model_path]
         self.handlers[stream_id] = handler
-        
         return True
     
     def remove_stream(self, stream_id):
@@ -770,6 +1008,8 @@ class RTSPManager:
         if stream_id in self.handlers:
             self.handlers[stream_id].stop()
             del self.handlers[stream_id]
+            # 清理轮询器
+            polling_manager.remove_polling(stream_id)
             print(f"🗑️ 移除RTSP流: {stream_id}")
     
     def start_stream(self, stream_id):
@@ -840,16 +1080,28 @@ class RTSPManager:
             handler = self.handlers[stream_id]
             handler.stream_config.update(new_config)
             
-            # 如果模型路径变了，需要重新加载模型
-            model_path = new_config.get('model_path')
-            if model_path and model_path != handler.model:
-                if model_path not in self.models:
-                    try:
-                        self.models[model_path] = YOLO(model_path)
-                    except Exception as e:
-                        print(f"❌ 更新模型失败: {model_path}, {e}")
-                        return False
-                handler.model = self.models[model_path]
+            # 更新轮询配置
+            if 'polling_enabled' in new_config:
+                polling_config = {
+                    'enabled': new_config.get('polling_enabled', False),
+                    'type': new_config.get('polling_type', 'frame'),
+                    'interval': new_config.get('polling_interval', 10),
+                    'models': json.loads(new_config.get('polling_models', '[]')),
+                    'order': json.loads(new_config.get('polling_order', '[]'))
+                }
+                handler.update_polling_config(polling_config)
+            
+            # 如果没有启用轮询且模型路径变了，需要重新加载模型
+            if not new_config.get('polling_enabled', False):
+                model_path = new_config.get('model_path')
+                if model_path and model_path != handler.model:
+                    if model_path not in self.models:
+                        try:
+                            self.models[model_path] = YOLO(model_path)
+                        except Exception as e:
+                            print(f"❌ 更新模型失败: {model_path}, {e}")
+                            return False
+                    handler.model = self.models[model_path]
             
             return True
         return False
@@ -866,6 +1118,7 @@ class RTSPManager:
         self.stop_all_streams()
         self.handlers.clear()
         self.models.clear()
+        polling_manager.cleanup()
 
 
 # 全局RTSP管理器实例

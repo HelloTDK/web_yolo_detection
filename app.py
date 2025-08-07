@@ -14,7 +14,7 @@ import time
 from yolo_seg_handler import YOLOSegmentationHandler
 
 # 导入新的模块
-from models.database import db, User, DetectionResult, AlertRecord, RTSPStream
+from models.database import db, User, DetectionResult, AlertRecord, RTSPStream, ModelPollingConfig
 from routes.rtsp_routes import rtsp_bp
 from services.rtsp_handler import rtsp_manager
 
@@ -1966,6 +1966,337 @@ def allowed_model_file(filename):
     """检查是否为支持的模型文件格式"""
     ALLOWED_EXTENSIONS = {'pt', 'onnx', 'torchscript', 'engine'}
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+# 模型轮询配置API
+@app.route('/api/polling/configs', methods=['GET'])
+def get_polling_configs():
+    """获取用户的模型轮询配置列表"""
+    try:
+        user_id = request.args.get('user_id', 1, type=int)
+        page = request.args.get('page', 1, type=int)
+        per_page = request.args.get('per_page', 20, type=int)
+        
+        # 分页查询
+        configs = ModelPollingConfig.query.filter_by(user_id=user_id).paginate(
+            page=page, per_page=per_page, error_out=False
+        )
+        
+        config_list = []
+        for config in configs.items:
+            config_data = {
+                'id': config.id,
+                'name': config.name,
+                'is_active': config.is_active,
+                'polling_type': config.polling_type,
+                'interval_value': config.interval_value,
+                'model_paths': json.loads(config.model_paths) if config.model_paths else [],
+                'model_order': json.loads(config.model_order) if config.model_order else [],
+                'description': config.description,
+                'created_at': config.created_at.isoformat(),
+                'updated_at': config.updated_at.isoformat()
+            }
+            config_list.append(config_data)
+        
+        return jsonify({
+            'success': True,
+            'configs': config_list,
+            'pagination': {
+                'page': configs.page,
+                'pages': configs.pages,
+                'per_page': configs.per_page,
+                'total': configs.total,
+                'has_next': configs.has_next,
+                'has_prev': configs.has_prev
+            }
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'message': f'获取轮询配置失败: {str(e)}'}), 500
+
+@app.route('/api/polling/configs', methods=['POST'])
+def create_polling_config():
+    """创建模型轮询配置"""
+    try:
+        data = request.get_json()
+        user_id = data.get('user_id', 1)
+        
+        # 验证必要字段
+        required_fields = ['name', 'model_paths']
+        for field in required_fields:
+            if not data.get(field):
+                return jsonify({'success': False, 'message': f'缺少必要字段: {field}'}), 400
+        
+        # 验证模型路径列表
+        model_paths = data.get('model_paths', [])
+        if not isinstance(model_paths, list) or len(model_paths) == 0:
+            return jsonify({'success': False, 'message': '模型路径列表不能为空'}), 400
+        
+        if len(model_paths) > 10:
+            return jsonify({'success': False, 'message': '最多支持10个模型'}), 400
+        
+        # 检查同名配置是否存在
+        existing = ModelPollingConfig.query.filter_by(user_id=user_id, name=data['name']).first()
+        if existing:
+            return jsonify({'success': False, 'message': '同名轮询配置已存在'}), 400
+        
+        # 处理轮询顺序
+        model_order = data.get('model_order', list(range(len(model_paths))))
+        if len(model_order) != len(model_paths):
+            model_order = list(range(len(model_paths)))
+        
+        # 创建配置记录
+        config = ModelPollingConfig(
+            name=data['name'],
+            user_id=user_id,
+            is_active=data.get('is_active', True),
+            polling_type=data.get('polling_type', 'frame'),
+            interval_value=data.get('interval_value', 10),
+            model_paths=json.dumps(model_paths),
+            model_order=json.dumps(model_order),
+            description=data.get('description', '')
+        )
+        
+        db.session.add(config)
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': '模型轮询配置创建成功',
+            'config': {
+                'id': config.id,
+                'name': config.name,
+                'model_count': len(model_paths)
+            }
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': f'创建轮询配置失败: {str(e)}'}), 500
+
+@app.route('/api/polling/configs/<int:config_id>', methods=['GET'])
+def get_polling_config(config_id):
+    """获取指定的模型轮询配置"""
+    try:
+        user_id = request.args.get('user_id', 1, type=int)
+        
+        config = ModelPollingConfig.query.filter_by(id=config_id, user_id=user_id).first()
+        if not config:
+            return jsonify({'success': False, 'message': '轮询配置不存在'}), 404
+        
+        config_data = {
+            'id': config.id,
+            'name': config.name,
+            'is_active': config.is_active,
+            'polling_type': config.polling_type,
+            'interval_value': config.interval_value,
+            'model_paths': json.loads(config.model_paths) if config.model_paths else [],
+            'model_order': json.loads(config.model_order) if config.model_order else [],
+            'description': config.description,
+            'created_at': config.created_at.isoformat(),
+            'updated_at': config.updated_at.isoformat()
+        }
+        
+        return jsonify({
+            'success': True,
+            'config': config_data
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'message': f'获取轮询配置失败: {str(e)}'}), 500
+
+@app.route('/api/polling/configs/<int:config_id>', methods=['PUT'])
+def update_polling_config(config_id):
+    """更新模型轮询配置"""
+    try:
+        data = request.get_json()
+        user_id = data.get('user_id', 1)
+        
+        config = ModelPollingConfig.query.filter_by(id=config_id, user_id=user_id).first()
+        if not config:
+            return jsonify({'success': False, 'message': '轮询配置不存在'}), 404
+        
+        # 更新字段
+        update_fields = ['name', 'is_active', 'polling_type', 'interval_value', 'description']
+        for field in update_fields:
+            if field in data:
+                setattr(config, field, data[field])
+        
+        # 特殊处理模型路径和顺序
+        if 'model_paths' in data:
+            model_paths = data['model_paths']
+            if not isinstance(model_paths, list) or len(model_paths) == 0:
+                return jsonify({'success': False, 'message': '模型路径列表不能为空'}), 400
+            
+            if len(model_paths) > 10:
+                return jsonify({'success': False, 'message': '最多支持10个模型'}), 400
+            
+            config.model_paths = json.dumps(model_paths)
+            
+            # 更新模型顺序
+            model_order = data.get('model_order', list(range(len(model_paths))))
+            if len(model_order) != len(model_paths):
+                model_order = list(range(len(model_paths)))
+            config.model_order = json.dumps(model_order)
+        
+        # 检查同名配置（排除当前配置）
+        if 'name' in data:
+            existing = ModelPollingConfig.query.filter_by(user_id=user_id, name=data['name']).first()
+            if existing and existing.id != config_id:
+                return jsonify({'success': False, 'message': '同名轮询配置已存在'}), 400
+        
+        config.updated_at = datetime.utcnow()
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': '模型轮询配置更新成功'
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': f'更新轮询配置失败: {str(e)}'}), 500
+
+@app.route('/api/polling/configs/<int:config_id>', methods=['DELETE'])
+def delete_polling_config(config_id):
+    """删除模型轮询配置"""
+    try:
+        user_id = request.args.get('user_id', 1, type=int)
+        
+        config = ModelPollingConfig.query.filter_by(id=config_id, user_id=user_id).first()
+        if not config:
+            return jsonify({'success': False, 'message': '轮询配置不存在'}), 404
+        
+        config_name = config.name
+        
+        # 检查是否有RTSP流正在使用此配置
+        using_streams = RTSPStream.query.filter_by(polling_config_id=config_id).all()
+        if using_streams:
+            stream_names = [stream.name for stream in using_streams]
+            return jsonify({
+                'success': False, 
+                'message': f'无法删除：以下RTSP流正在使用此配置: {", ".join(stream_names)}'
+            }), 400
+        
+        # 删除配置
+        db.session.delete(config)
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': f'模型轮询配置 "{config_name}" 删除成功'
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': f'删除轮询配置失败: {str(e)}'}), 500
+
+@app.route('/api/polling/configs/batch-delete', methods=['DELETE'])
+def batch_delete_polling_configs():
+    """批量删除模型轮询配置"""
+    try:
+        data = request.get_json()
+        config_ids = data.get('config_ids', [])
+        user_id = data.get('user_id', 1)
+        
+        if not config_ids:
+            return jsonify({'success': False, 'message': '未指定要删除的配置'}), 400
+        
+        deleted_count = 0
+        failed_count = 0
+        failed_names = []
+        
+        for config_id in config_ids:
+            try:
+                config = ModelPollingConfig.query.filter_by(id=config_id, user_id=user_id).first()
+                if not config:
+                    failed_count += 1
+                    continue
+                
+                # 检查是否有RTSP流正在使用此配置
+                using_streams = RTSPStream.query.filter_by(polling_config_id=config_id).all()
+                if using_streams:
+                    failed_count += 1
+                    failed_names.append(config.name)
+                    continue
+                
+                # 删除配置
+                db.session.delete(config)
+                deleted_count += 1
+                
+            except Exception as e:
+                print(f"删除轮询配置 {config_id} 失败: {e}")
+                failed_count += 1
+        
+        db.session.commit()
+        
+        message = f'成功删除 {deleted_count} 个配置'
+        if failed_count > 0:
+            message += f'，{failed_count} 个配置删除失败'
+            if failed_names:
+                message += f'（被使用的配置: {", ".join(failed_names)}）'
+        
+        return jsonify({
+            'success': True,
+            'message': message,
+            'deleted_count': deleted_count,
+            'failed_count': failed_count
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': f'批量删除失败: {str(e)}'}), 500
+
+@app.route('/api/polling/test-config', methods=['POST'])
+def test_polling_config():
+    """测试模型轮询配置"""
+    try:
+        data = request.get_json()
+        model_paths = data.get('model_paths', [])
+        
+        if not model_paths:
+            return jsonify({'success': False, 'message': '模型路径列表不能为空'}), 400
+        
+        test_results = []
+        valid_models = []
+        
+        for i, model_path in enumerate(model_paths):
+            try:
+                # 尝试加载模型
+                test_model = YOLO(model_path)
+                test_results.append({
+                    'index': i,
+                    'model_path': model_path,
+                    'status': 'success',
+                    'message': '模型加载成功',
+                    'classes_count': len(test_model.names),
+                    'model_type': 'segmentation' if 'seg' in model_path.lower() else 'detection'
+                })
+                valid_models.append(model_path)
+                del test_model  # 释放内存
+            except Exception as e:
+                test_results.append({
+                    'index': i,
+                    'model_path': model_path,
+                    'status': 'error',
+                    'message': f'模型加载失败: {str(e)}',
+                    'classes_count': 0,
+                    'model_type': 'unknown'
+                })
+        
+        success_count = len(valid_models)
+        total_count = len(model_paths)
+        
+        return jsonify({
+            'success': True,
+            'message': f'测试完成：{success_count}/{total_count} 个模型加载成功',
+            'test_results': test_results,
+            'valid_models': valid_models,
+            'success_count': success_count,
+            'total_count': total_count
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'message': f'测试轮询配置失败: {str(e)}'}), 500
 
 if __name__ == '__main__':
     # 创建数据库表和初始数据

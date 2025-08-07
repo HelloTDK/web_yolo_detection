@@ -9,27 +9,27 @@
       </template>
       
       <el-radio-group v-model="detectionMode" size="large" @change="handleModeChange">
-        <el-radio-button label="image">
+        <el-radio-button value="image">
           <el-icon><Picture /></el-icon>
           图片检测
         </el-radio-button>
-        <el-radio-button label="image_seg">
+        <el-radio-button value="image_seg">
           <el-icon><Picture /></el-icon>
           图片分割
         </el-radio-button>
-        <el-radio-button label="video">
+        <el-radio-button value="video">
           <el-icon><VideoPlay /></el-icon>
           视频检测
         </el-radio-button>
-        <el-radio-button label="video_seg">
+        <el-radio-button value="video_seg">
           <el-icon><VideoPlay /></el-icon>
           视频分割
         </el-radio-button>
-        <el-radio-button label="camera">
+        <el-radio-button value="camera">
           <el-icon><Camera /></el-icon>
           摄像头检测
         </el-radio-button>
-        <el-radio-button label="rtsp">
+        <el-radio-button value="rtsp">
           <el-icon><VideoPlay /></el-icon>
           RTSP流检测
         </el-radio-button>
@@ -273,6 +273,23 @@
             </el-card>
           </div>
           
+          <!-- RTSP流分页控件 -->
+          <div v-if="detectionMode === 'rtsp'" class="rtsp-pagination">
+            <el-pagination
+              v-model:current-page="rtspCurrentPage"
+              :page-size="rtspPageSize"
+              :total="totalRtspStreams"
+              :pager-count="5"
+              layout="total, prev, pager, next, jumper"
+              @current-change="handleRtspPageChange"
+              hide-on-single-page
+              small
+            />
+            <div class="page-info">
+              <span>每页最多显示 {{ rtspPageSize }} 个流</span>
+            </div>
+          </div>
+          
           <!-- 检测控制 -->
           <div class="detection-controls" v-if="detectionMode !== 'camera' && detectionMode !== 'rtsp'">
             <el-button 
@@ -486,7 +503,15 @@
           />
         </el-form-item>
         
-        <el-form-item label="检测模型">
+        <el-form-item label="模型配置">
+          <el-radio-group v-model="streamForm.model_mode" @change="onModelModeChange">
+            <el-radio value="single">单一模型</el-radio>
+            <el-radio value="polling">模型轮询</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        
+        <!-- 单一模型选择 -->
+        <el-form-item v-if="streamForm.model_mode === 'single'" label="检测模型">
           <el-select 
             v-model="streamForm.model_path" 
             placeholder="选择检测模型"
@@ -500,6 +525,131 @@
             />
           </el-select>
         </el-form-item>
+        
+        <!-- 轮询配置 -->
+        <div v-if="streamForm.model_mode === 'polling'">
+          <el-form-item label="轮询配置">
+            <el-radio-group v-model="streamForm.polling_config_mode" @change="onPollingConfigModeChange">
+              <el-radio value="preset">使用预设配置</el-radio>
+              <el-radio value="custom">自定义配置</el-radio>
+            </el-radio-group>
+          </el-form-item>
+          
+          <!-- 预设轮询配置 -->
+          <el-form-item v-if="streamForm.polling_config_mode === 'preset'" label="选择配置">
+            <el-select 
+              v-model="streamForm.polling_config_id" 
+              placeholder="选择轮询配置"
+              style="width: 100%"
+              @change="onPresetConfigChange"
+            >
+              <el-option
+                v-for="config in pollingConfigs"
+                :key="config.id"
+                :label="config.name"
+                :value="config.id"
+              >
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                  <span>{{ config.name }}</span>
+                  <div>
+                    <el-tag size="small" :type="config.polling_type === 'frame' ? 'primary' : 'success'">
+                      {{ config.polling_type === 'frame' ? '按帧' : '按时间' }}
+                    </el-tag>
+                    <el-tag size="small" type="info" style="margin-left: 4px;">
+                      {{ config.model_paths.length }}个模型
+                    </el-tag>
+                  </div>
+                </div>
+              </el-option>
+            </el-select>
+            <div v-if="selectedPollingConfig" class="polling-config-preview">
+              <el-divider content-position="left">配置预览</el-divider>
+              <el-descriptions :column="2" size="small" border>
+                <el-descriptions-item label="轮询类型">
+                  {{ selectedPollingConfig.polling_type === 'frame' ? '按帧数' : '按时间' }}
+                </el-descriptions-item>
+                <el-descriptions-item label="轮询间隔">
+                  {{ selectedPollingConfig.interval_value }}{{ selectedPollingConfig.polling_type === 'frame' ? '帧' : '秒' }}
+                </el-descriptions-item>
+                <el-descriptions-item label="模型数量" :span="2">
+                  {{ selectedPollingConfig.model_paths.length }} 个模型
+                </el-descriptions-item>
+              </el-descriptions>
+              <div class="polling-models-preview">
+                <label style="font-size: 13px; color: #606266;">轮询模型列表：</label>
+                <div class="models-tags">
+                  <el-tag 
+                    v-for="(modelPath, index) in selectedPollingConfig.model_paths" 
+                    :key="modelPath"
+                    size="small"
+                    style="margin: 2px;"
+                  >
+                    {{ index + 1 }}. {{ getModelName(modelPath) }}
+                  </el-tag>
+                </div>
+              </div>
+            </div>
+          </el-form-item>
+          
+          <!-- 自定义轮询配置 -->
+          <div v-if="streamForm.polling_config_mode === 'custom'">
+            <el-form-item label="轮询类型">
+              <el-radio-group v-model="streamForm.polling_type">
+                <el-radio value="frame">按帧数轮询</el-radio>
+                <el-radio value="time">按时间轮询</el-radio>
+              </el-radio-group>
+            </el-form-item>
+            
+            <el-form-item label="轮询间隔">
+              <el-input-number 
+                v-model="streamForm.polling_interval" 
+                :min="1" 
+                :max="streamForm.polling_type === 'frame' ? 100 : 300"
+                :step="streamForm.polling_type === 'frame' ? 1 : 5"
+                style="width: 150px;"
+              />
+              <span style="margin-left: 8px; color: #606266;">
+                {{ streamForm.polling_type === 'frame' ? '帧' : '秒' }}
+              </span>
+            </el-form-item>
+            
+            <el-form-item label="轮询模型">
+              <el-select
+                v-model="streamForm.polling_models"
+                multiple
+                placeholder="选择要轮询的模型（最多10个）"
+                style="width: 100%;"
+                :multiple-limit="10"
+              >
+                <el-option
+                  v-for="model in availableModels"
+                  :key="model.path"
+                  :label="model.name"
+                  :value="model.path"
+                >
+                  <span style="float: left">{{ model.name }}</span>
+                  <span style="float: right; color: #8492a6; font-size: 13px">
+                    {{ model.pretrained ? '预训练' : '自定义' }}
+                  </span>
+                </el-option>
+              </el-select>
+              
+              <!-- 轮询顺序调整 -->
+              <div v-if="streamForm.polling_models.length > 1" style="margin-top: 10px;">
+                <label style="font-size: 14px; margin-bottom: 8px; display: block;">轮询顺序：</label>
+                <div class="simple-polling-order">
+                  <el-tag 
+                    v-for="(modelPath, index) in streamForm.polling_models"
+                    :key="modelPath"
+                    style="margin: 2px 4px 2px 0;"
+                  >
+                    {{ index + 1 }}. {{ getModelName(modelPath) }}
+                  </el-tag>
+                </div>
+              </div>
+            </el-form-item>
+          </div>
+        </div>
         
         <el-form-item label="功能设置">
           <div class="feature-settings">
@@ -607,6 +757,12 @@ export default {
         username: '',
         password: '',
         model_path: 'yolov8n.pt',
+        model_mode: 'single', // 'single' 或 'polling'
+        polling_config_mode: 'preset', // 'preset' 或 'custom'
+        polling_config_id: null,
+        polling_type: 'frame',
+        polling_interval: 10,
+        polling_models: [],
         detection_enabled: true,
         tracking_enabled: false,
         counting_enabled: false,
@@ -627,7 +783,16 @@ export default {
       },
       
       // 可用模型列表 - 从API动态加载
-      availableModels: []
+      availableModels: [],
+      
+      // 轮询配置相关
+      pollingConfigs: [],
+      selectedPollingConfig: null,
+      
+      // RTSP分页相关
+      rtspCurrentPage: 1,
+      rtspPageSize: 4, // 每页最多4个流（四宫格）
+      totalRtspStreams: 0
     }
   },
   
@@ -643,6 +808,9 @@ export default {
   async mounted() {
     // 加载可用模型列表
     await this.loadAvailableModels()
+    
+    // 加载轮询配置列表
+    await this.loadPollingConfigs()
     
     // 如果是RTSP模式，初始化RTSP流
     if (this.detectionMode === 'rtsp') {
@@ -735,6 +903,64 @@ export default {
         console.error('❌ 加载模型列表异常:', error)
         ElMessage.error('加载模型列表失败: ' + error.message)
       }
+    },
+    
+    // 加载轮询配置列表
+    async loadPollingConfigs() {
+      try {
+        // 修复：统一使用store中的用户ID
+        const userId = this.$store.getters.currentUser?.id || 1
+        const response = await fetch(`http://localhost:5000/api/polling/configs?user_id=${userId}`)
+        const data = await response.json()
+        if (data.success) {
+          this.pollingConfigs = data.configs.filter(config => config.is_active)
+          console.log('✅ 加载轮询配置成功:', this.pollingConfigs.length, '个配置')
+        } else {
+          console.error('❌ 加载轮询配置失败:', data.message)
+          ElMessage.error(data.message)
+        }
+      } catch (error) {
+        console.error('❌ 加载轮询配置异常:', error)
+        ElMessage.error('加载轮询配置失败: ' + error.message)
+      }
+    },
+    
+    // 模型模式改变
+    onModelModeChange(mode) {
+      if (mode === 'single') {
+        // 切换到单一模型模式时重置轮询相关字段
+        this.streamForm.polling_config_id = null
+        this.streamForm.polling_models = []
+        this.selectedPollingConfig = null
+      } else if (mode === 'polling') {
+        // 切换到轮询模式时清空单一模型
+        this.streamForm.model_path = ''
+      }
+    },
+    
+    // 轮询配置模式改变
+    onPollingConfigModeChange(mode) {
+      if (mode === 'preset') {
+        // 切换到预设配置时清空自定义配置
+        this.streamForm.polling_models = []
+        this.streamForm.polling_type = 'frame'
+        this.streamForm.polling_interval = 10
+      } else if (mode === 'custom') {
+        // 切换到自定义配置时清空预设配置
+        this.streamForm.polling_config_id = null
+        this.selectedPollingConfig = null
+      }
+    },
+    
+    // 预设配置改变
+    onPresetConfigChange(configId) {
+      const config = this.pollingConfigs.find(c => c.id === configId)
+      this.selectedPollingConfig = config || null
+    },
+    
+    // 获取模型名称
+    getModelName(modelPath) {
+      return modelPath.split('/').pop() || modelPath
     },
     
     getUploadAction() {
@@ -939,7 +1165,13 @@ export default {
         
         if (data.success) {
           this.rtspStreams = data.streams
+          this.totalRtspStreams = data.streams.length
           console.log('✅ 加载RTSP流列表成功:', this.rtspStreams.length, '个流')
+          
+          // 如果当前页没有流，回到第一页
+          if (this.getCurrentPageStreams().length === 0 && this.rtspCurrentPage > 1) {
+            this.rtspCurrentPage = 1
+          }
         } else {
           console.error('❌ 加载RTSP流列表失败:', data.message)
         }
@@ -948,9 +1180,19 @@ export default {
       }
     },
     
-    // 根据位置获取流
+    // 根据位置获取流（支持分页）
     getStreamByPosition(x, y) {
-      return this.rtspStreams.find(stream => stream.position_x === x && stream.position_y === y)
+      const currentPageStreams = this.getCurrentPageStreams()
+      // 将四宫格位置映射到当前页的流索引
+      const gridIndex = y * 2 + x // (0,0)=0, (1,0)=1, (0,1)=2, (1,1)=3
+      return currentPageStreams[gridIndex] || null
+    },
+    
+    // 获取当前页的流列表
+    getCurrentPageStreams() {
+      const start = (this.rtspCurrentPage - 1) * this.rtspPageSize
+      const end = start + this.rtspPageSize
+      return this.rtspStreams.slice(start, end)
     },
     
     // 获取流状态
@@ -1187,6 +1429,8 @@ export default {
     // 编辑流
     editStream(stream) {
       this.editingStream = stream
+      
+      // 基础字段
       this.streamForm = {
         name: stream.name,
         url: stream.url,
@@ -1199,6 +1443,41 @@ export default {
         alert_enabled: stream.alert_enabled,
         is_active: stream.is_active
       }
+      
+      // 轮询配置字段
+      if (stream.polling_enabled) {
+        this.streamForm.model_mode = 'polling'
+        
+        if (stream.polling_config_id) {
+          // 使用预设配置
+          this.streamForm.polling_config_mode = 'preset'
+          this.streamForm.polling_config_id = stream.polling_config_id
+          this.streamForm.polling_type = 'frame'
+          this.streamForm.polling_interval = 10
+          this.streamForm.polling_models = []
+          
+          // 设置选中的轮询配置
+          this.selectedPollingConfig = this.pollingConfigs.find(c => c.id === stream.polling_config_id) || null
+        } else {
+          // 自定义配置
+          this.streamForm.polling_config_mode = 'custom'
+          this.streamForm.polling_config_id = null
+          this.streamForm.polling_type = stream.polling_type || 'frame'
+          this.streamForm.polling_interval = stream.polling_interval || 10
+          this.streamForm.polling_models = stream.polling_models || []
+          this.selectedPollingConfig = null
+        }
+      } else {
+        // 单一模型模式
+        this.streamForm.model_mode = 'single'
+        this.streamForm.polling_config_mode = 'preset'
+        this.streamForm.polling_config_id = null
+        this.streamForm.polling_type = 'frame'
+        this.streamForm.polling_interval = 10
+        this.streamForm.polling_models = []
+        this.selectedPollingConfig = null
+      }
+      
       this.showAddStreamDialog = true
     },
     
@@ -1297,10 +1576,46 @@ export default {
         
         this.streamSaving = true
         
+        // 构造流数据
         const streamData = {
           ...this.streamForm,
           user_id: this.$store.getters.currentUser?.id || 1
         }
+        
+        // 处理轮询配置
+        if (this.streamForm.model_mode === 'polling') {
+          streamData.polling_enabled = true
+          
+          if (this.streamForm.polling_config_mode === 'preset' && this.streamForm.polling_config_id) {
+            // 使用预设配置
+            streamData.polling_config_id = this.streamForm.polling_config_id
+            // 清空自定义配置字段
+            delete streamData.polling_type
+            delete streamData.polling_interval
+            delete streamData.polling_models
+          } else if (this.streamForm.polling_config_mode === 'custom') {
+            // 使用自定义配置
+            streamData.polling_type = this.streamForm.polling_type
+            streamData.polling_interval = this.streamForm.polling_interval
+            streamData.polling_models = this.streamForm.polling_models
+            // 生成轮询顺序（按选择顺序）
+            streamData.polling_order = this.streamForm.polling_models.map((_, index) => index)
+            // 清空预设配置ID
+            delete streamData.polling_config_id
+          }
+        } else {
+          // 单一模型模式
+          streamData.polling_enabled = false
+          // 清空所有轮询相关字段
+          delete streamData.polling_config_id
+          delete streamData.polling_type
+          delete streamData.polling_interval
+          delete streamData.polling_models
+        }
+        
+        // 清理不需要发送的UI状态字段
+        delete streamData.model_mode
+        delete streamData.polling_config_mode
         
         let response
         if (this.editingStream) {
@@ -1350,12 +1665,19 @@ export default {
     // 重置流表单
     resetStreamForm() {
       this.editingStream = null
+      this.selectedPollingConfig = null
       this.streamForm = {
         name: '',
         url: '',
         username: '',
         password: '',
         model_path: 'yolov8n.pt',
+        model_mode: 'single',
+        polling_config_mode: 'preset',
+        polling_config_id: null,
+        polling_type: 'frame',
+        polling_interval: 10,
+        polling_models: [],
         detection_enabled: true,
         tracking_enabled: false,
         counting_enabled: false,
@@ -1477,6 +1799,10 @@ export default {
       } catch (error) {
         ElMessage.error(`创建测试流异常: ${error.message}`)
       }
+    },
+    
+    handleRtspPageChange(page) {
+      this.rtspCurrentPage = page
     }
   },
   
@@ -1978,5 +2304,51 @@ export default {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
+}
+
+/* 轮询配置相关样式 */
+.polling-config-preview {
+  margin-top: 15px;
+  padding: 12px;
+  background: #f8f9fa;
+  border-radius: 6px;
+  border: 1px solid #e4e7ed;
+}
+
+.polling-models-preview {
+  margin-top: 10px;
+}
+
+.models-tags {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.simple-polling-order {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 8px;
+  background: #f8f9fa;
+  border-radius: 4px;
+  border: 1px solid #e4e7ed;
+}
+
+.form-tip {
+  font-size: 12px;
+  color: #909399;
+  margin-top: 5px;
+}
+
+.rtsp-pagination {
+  margin-top: 20px;
+  text-align: center;
+}
+
+.page-info {
+  margin-top: 10px;
+  color: #909399;
 }
 </style>
